@@ -1,7 +1,3 @@
-#division3teams <- read_xlsx("division3baseballteams.xlsx")
-#Hobartteam <- read_xlsx("baseballapp/hobarttestroster.xlsx")
-#UofRteam <- read_xlsx("baseballapp/UofRTestRoster.xlsx")
-
 library(tidyverse)
 library(shiny)
 library(DT)
@@ -160,14 +156,15 @@ importPage <- function() {
     fileInput("excel_file", "Choose Excel File", accept = ".xlsx"),
     actionButton("import_players", "Import", class = "centered-btn"),
     actionButton("go_to_list", "Back", class = "back-btn"),
-    br(), br(),
+    actionButton("save_rosters", "Save Rosters", class = "centered-btn"),
+    br(),
+    br(),
     DTOutput("imported_player_preview")
   )
 }
 
 # Update Player Page
 updatePlayerPage <- function() {
-  # Edit/Delete UI
   fluidPage(
     fluidRow(
       column(2, actionButton("go_home", "Home", class = "wide-btn")),
@@ -176,9 +173,8 @@ updatePlayerPage <- function() {
     fluidRow(
       column(4, 
              paste("Edit Player Information"),
-             selectInput("edit_player_name", "Select Player to Edit", choices = stored_players$FullName, selected = NULL), # FullName lookup
-             verbatimTextOutput("player_info_display_edit"), # Show current player info
-             
+             selectInput("edit_player_name", "Select Player to Edit", choices = NULL, selected = NULL),  # Changed from stored_players$FullName
+             verbatimTextOutput("player_info_display_edit"),
              textInput("edit_first_name", "First Name", ""),
              textInput("edit_last_name", "Last Name", ""),
              numericInput("edit_jersey_number", "Jersey Number", value = NULL),
@@ -187,20 +183,20 @@ updatePlayerPage <- function() {
              selectInput("edit_batter_handedness", "Batting Hand", choices = c("Right", "Left", "Switch")),
              selectInput("edit_throwing_handedness", "Throwing Hand", choices = c("Right", "Left")),
              selectInput("edit_status", "Status", choices = c("Active", "Injured", "Inactive")),
-             
              actionButton("update_player", "Confirm Update", class = "wide-btn")
       ),
       column(4, 
              paste("Delete Player"),
-             selectInput("delete_player_id", "Select Player to Delete", choices = stored_players$FullName, selected = NULL),
+             selectInput("delete_player_id", "Select Player to Delete", choices = NULL, selected = NULL),  # Changed from stored_players$FullName
              verbatimTextOutput("player_info_display_delete"),
              actionButton("remove_player", "Delete Player", class = "wide-btn")
       ),
       column(4,
              paste("Merge Players Data")
       )
-    )
-  )  
+    ),
+    actionButton("save_rosters", "Save Rosters", class = "centered-btn")
+  )
 }
 
 # Stats Page - User Interface
@@ -639,7 +635,7 @@ server <- function(input, output, session) {
       fluidRow(
         column(4,
                h4("FB"),
-               p("%", style = "font-weight: bold;"),  # FB velocity range
+               p("TBD", style = "font-weight: bold;"),  # FB velocity range
                tags$table(
                  style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #f0f0f0;",
                  tags$tr(
@@ -656,7 +652,7 @@ server <- function(input, output, session) {
         ),
         column(4,
                h4("CB"),
-               p("%", style = "font-weight: bold;"),  # CB velocity range
+               p("TBD", style = "font-weight: bold;"),  # CB velocity range
                tags$table(
                  style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #f0f0f0;",
                  tags$tr(
@@ -673,7 +669,7 @@ server <- function(input, output, session) {
         ),
         column(4,
                h4("CH"),
-               p("%", style = "font-weight: bold;"),  # CH velocity range
+               p("TBD", style = "font-weight: bold;"),  # CH velocity range
                tags$table(
                  style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #f0f0f0;",
                  tags$tr(
@@ -695,16 +691,16 @@ server <- function(input, output, session) {
       tags$table(
         style = "width: 100%; border-collapse: collapse; text-align: left;",
         tags$tr(
-          tags$th("Strike %"), tags$td(""),
-          tags$th("Called Strike %"), tags$td(""),
-          tags$th("Swing & Miss %"), tags$td(""),
-          tags$th("% of Total Strikeouts"), tags$td("")
+          tags$th("Strike %"), tags$td("TBD"),
+          tags$th("Called Strike %"), tags$td("TBD"),
+          tags$th("Swing & Miss %"), tags$td("TBD"),
+          tags$th("% of Total Strikeouts"), tags$td("TBD")
         ),
         tags$tr(
-          tags$th("Chase Pitch Swing %"), tags$td(""),
-          tags$th("Hard Hit %"), tags$td(""),
-          tags$th("Weak Hit %"), tags$td(""),
-          tags$th("Ground Ball %"), tags$td("")
+          tags$th("Chase Pitch Swing %"), tags$td("TBD"),
+          tags$th("Hard Hit %"), tags$td("TBD"),
+          tags$th("Weak Hit %"), tags$td("TBD"),
+          tags$th("Ground Ball %"), tags$td("TBD")
         )
       ),
       
@@ -787,11 +783,11 @@ server <- function(input, output, session) {
         style = "width: 100%; border-collapse: collapse; text-align: center;",
         tags$tr(
           tags$th(style = "border: 1px solid black; padding: 5px;", "Last 25"),
-          tags$td(style = "border: 1px solid black; padding: 5px;", "")
+          tags$td(style = "border: 1px solid black; padding: 5px;", "TBD")
         ),
         tags$tr(
           tags$th(style = "border: 1px solid black; padding: 5px;", "All Time"),
-          tags$td(style = "border: 1px solid black; padding: 5px;", "")
+          tags$td(style = "border: 1px solid black; padding: 5px;", "TBD")
         )
       )
     )
@@ -1387,6 +1383,12 @@ server <- function(input, output, session) {
   })
   
   ########## Reactive Databases ##########
+  
+  division3teams <- if (file.exists("division3teams.xlsx")) {
+    readxl::read_excel("division3teams.xlsx", sheet = 1)
+  } else {
+    data.frame(CollegeName = character(), TeamID = numeric(), stringsAsFactors = FALSE)
+    
   # Reactive Player Database
   stored_players <<- if (exists("stored_players", envir = .GlobalEnv)) {
     get("stored_players", envir = .GlobalEnv)
@@ -1406,7 +1408,100 @@ server <- function(input, output, session) {
       stringsAsFactors = FALSE
     )
   }
+
+  data_env <- reactiveValues(
+    stored_players = if (file.exists("data/stored_players.csv")) read.csv("data/stored_players.csv", stringsAsFactors = FALSE) else data.frame(
+      PlayerID = numeric(),
+      TeamID = numeric(),
+      FirstName = character(),
+      LastName = character(),
+      FullName = character(),
+      JerseyNumber = numeric(),
+      PlayerType = character(),
+      GradYear = numeric(),
+      BatterHandedness = character(),
+      ThrowingHandedness = character(),
+      Status = character(),
+      stringsAsFactors = FALSE
+    ),
+    pitch_data = if (file.exists("data/pitch_data.csv")) read.csv("data/pitch_data.csv", stringsAsFactors = FALSE) else data.frame(
+      Date = as.Date(character()),
+      EventType = character(),
+      EventID = numeric(),
+      HomeTeamID = numeric(),
+      AwayTeamID = numeric(),
+      HitterID = numeric(),
+      PitcherID = numeric(),
+      GamePitchNumber = numeric(),
+      PitchersPitchCount = numeric(),
+      AtBatPitchNumber = numeric(),
+      HalfInning = character(),
+      Inning = numeric(),
+      Outs = numeric(),
+      Strikes = numeric(),
+      Balls = numeric(),
+      PitchOutcome = character(),
+      PitchVelo = numeric(),
+      PitchType = character(),
+      PitchLocationx = numeric(),
+      PitchLocationy = numeric(),
+      BallInPlayOutcome = character(),
+      BatterScored = character(),
+      BallFlight = character(),
+      ContactType = character(),
+      SprayChartx = numeric(),
+      SprayCharty = numeric(),
+      stringsAsFactors = FALSE
+    ),
+    # Skeleton for hitter_game_stats (to be implemented later)
+    hitter_game_stats = data.frame(
+      player_id = character(),
+      game_id = character(),
+      at_bats = numeric(),
+      hits = numeric(),
+      stringsAsFactors = FALSE
+      # Add more columns (e.g., singles, doubles, etc.) and logic here later
+    ),
+    # Skeleton for pitcher_game_stats (to be implemented later)
+    pitcher_game_stats = data.frame(
+      player_id = character(),
+      game_id = character(),
+      innings_pitched = numeric(),
+      strikeouts = numeric(),
+      stringsAsFactors = FALSE
+      # Add more columns (e.g., walks, hits_allowed, etc.) and logic here later
+    ),
+    # Skeleton for hitter_output_stats (to be implemented later)
+    hitter_output_stats = data.frame(
+      player_id = character(),
+      game_id = character(),
+      runs = numeric(),
+      rbi = numeric(),
+      stringsAsFactors = FALSE
+      # Add more columns and logic here later
+    ),
+    # Skeleton for pitcher_output_stats (to be implemented later)
+    pitcher_output_stats = data.frame(
+      player_id = character(),
+      game_id = character(),
+      era = numeric(),
+      whip = numeric(),
+      stringsAsFactors = FALSE
+      # Add more columns and logic here later
+    ),
+    last_saved = Sys.time()
+  )
   
+  # File paths for saving datasets locally
+  save_paths <- list(
+    stored_players = "data/stored_players.csv",
+    pitch_data = "data/pitch_data.csv",
+    # Add file paths for other tables when implemented
+    hitter_game_stats = "data/hitter_game_stats.csv",
+    pitcher_game_stats = "data/pitcher_game_stats.csv",
+    hitter_output_stats = "data/hitter_outputs.csv",
+    pitcher_output_stats = "data/pitcher_outputs.csv"
+  )
   
   # Reactive Values for Game State
   game_state <- reactiveValues(
@@ -2758,85 +2853,29 @@ server <- function(input, output, session) {
     app_state$page <- "start"
   })
   
-  ########## Adding Players Both Individually & Bulk with Excel ##########
-  ## Individually Adding PLayers on the Input Page, this is the Confirm Button
-  observeEvent(input$confirm_player, {
-    #Require Inputs
-    req(input$team_selection != "Choose Team")
-    req(input$first_name)
-    req(input$last_name)
-    req(input$jersey_number)
-    req(input$player_type)
-    req(input$grad_year)
-    if (input$player_type == "Hitter") {
-      req(input$batter_handedness)
-    }
-    if (input$player_type == "Pitcher") {
-      req(input$throwing_handedness)
-    }
-    if (input$player_type == "Two-Way") {
-      req(input$batter_handedness)
-      req(input$throwing_handedness)
-    }
-    
-    # Ensure Unique Player
-    existing_player <- stored_players %>%
-      filter(LastName == input$last_name, 
-             TeamID == (division3teams %>% filter(CollegeName == input$team_selection) %>% pull(TeamID)),
-             JerseyNumber == input$jersey_number)
-    
-    if (nrow(existing_player) > 0) {
-      showNotification("Player already exists!", type = "error")
-      return()  # Stop execution if player exists
-    }
-    
-    # Generating Unique 6-Digit Player_ID
-    repeat {
-      new_player_id <- sample(100000:999999, 1)
-      if (!new_player_id %in% stored_players$PlayerID) break
-    }
-    
-    #Create Short Tern Data Frame
-    new_player <- data.frame(
-      PlayerID = as.numeric(new_player_id),
-      TeamID = as.numeric(division3teams %>% filter(CollegeName == input$team_selection) %>% pull(TeamID)),
-      FirstName = as.character(input$first_name),
-      LastName = as.character(input$last_name),
-      FullName = paste(input$first_name, input$last_name),
-      JerseyNumber = as.numeric(input$jersey_number),
-      PlayerType = as.character(input$player_type),
-      GradYear = as.numeric(input$grad_year),
-      BatterHandedness = as.character(input$batter_handedness),
-      ThrowingHandedness = as.character(input$throwing_handedness),
-      Status = as.character(ifelse(input$grad_year < current_year, "Graduated", "Active")),
-      stringsAsFactors = FALSE
-    )
-    
-    # Bind the short term to the long term
-    stored_players <<- rbind(stored_players, new_player)
-    
-    # Show success message
-    showNotification("Player successfully added!", type = "message")
-    
-    #Reset the boxes for more players
-    updateSelectInput(session, "team_selection", selected = "Choose Team")
-    updateTextInput(session, "first_name", value = "")
-    updateTextInput(session, "last_name", value = "")
-    updateNumericInput(session, "jersey_number", value = NA)
-    updateSelectInput(session, "player_type", selected = "")
-    updateNumericInput(session, "grad_year", value = NA)
-    updateSelectInput(session, "batter_handedness", selected = "")
-    updateSelectInput(session, "throwing_handedness", selected = "")
-    
+  ########## Updating/Adding/Removing Players ##########
+  # Reactive value for stored_players (synced with data_env)
+  stored_players <- reactiveVal(data_env$stored_players)
+  
+  # Update team and player selections
+  observe({
+    req(data_env$stored_players)
+    teams <- unique(data_env$stored_players$team)
+    updateSelectInput(session, "team_select", choices = teams)
+    updateSelectInput(session, "player_select", choices = data_env$stored_players$PlayerID)
+    updateSelectInput(session, "hitter_select", choices = data_env$stored_players[data_env$stored_players$PlayerType %in% c("Hitter", "Two-Way"), "PlayerID"])
+    updateSelectInput(session, "edit_player_name", choices = data_env$stored_players$FullName, selected = NULL)
+    updateSelectInput(session, "delete_player_id", choices = data_env$stored_players$FullName, selected = NULL)
   })
   
-  # Bulk Import of Players Through Excel
+  # Bulk import of players (handles importPage)
+  # Bulk import of players (handles importPage)
   observeEvent(input$import_players, {
     req(input$excel_file)
     
-    uploaded_data <- read_excel(input$excel_file$datapath)
+    uploaded_data <- readxl::read_excel(input$excel_file$datapath)
     
-    # Make sure necessary columns exist in excel file
+    # Make sure necessary columns exist in Excel file
     required_columns <- c("CollegeName", "FirstName", "LastName", "JerseyNumber", "PlayerType", "GradYear", "BatterHandedness", "ThrowingHandedness")
     
     if (!all(required_columns %in% colnames(uploaded_data))) {
@@ -2847,7 +2886,7 @@ server <- function(input, output, session) {
     # Join TeamID into uploaded data
     uploaded_data <- uploaded_data %>%
       left_join(division3teams, by = "CollegeName") %>%
-      select(-CollegeName, -CollegeAbreviation, -Conference, -Region)  # Remove extra columns
+      select(-CollegeName, -CollegeAbreviation, -Conference, -Region, everything())  # Remove extra columns
     
     # Check for unmatched TeamID values
     if (any(is.na(uploaded_data$TeamID))) {
@@ -2855,7 +2894,7 @@ server <- function(input, output, session) {
       return()
     }
     
-    # Change college to right variable type
+    # Convert to correct data types
     uploaded_data <- uploaded_data %>%
       mutate(
         TeamID = as.numeric(TeamID),
@@ -2870,8 +2909,8 @@ server <- function(input, output, session) {
       ) %>%
       mutate(across(where(is.character), ~ ifelse(is.na(.), "", .)))
     
-    # Data table for existing players, then check to see if were uploading any existing players
-    existing_players <- stored_players %>%
+    # Check for existing players
+    existing_players <- data_env$stored_players %>%
       select(TeamID, FirstName, LastName, FullName, JerseyNumber, PlayerType, GradYear, BatterHandedness, ThrowingHandedness)
     
     new_players <- uploaded_data %>%
@@ -2882,8 +2921,8 @@ server <- function(input, output, session) {
       return()
     }
     
-    # Assign 6-digit Player_IDs
-    existing_ids <- stored_players$PlayerID
+    # Assign 6-digit PlayerIDs
+    existing_ids <- data_env$stored_players$PlayerID
     all_possible_ids <- 100000:999999
     available_ids <- setdiff(all_possible_ids, existing_ids)
     
@@ -2891,36 +2930,31 @@ server <- function(input, output, session) {
     
     # Set player status based on GradYear
     new_players <- new_players %>%
-      mutate(Status = ifelse(GradYear < current_year, "Graduated", "Active"))
+      mutate(Status = ifelse(GradYear < current_year, "Graduated", ifelse(GradYear == current_year, "Inactive", "Active")))
     
-    # Add new players to database
-    stored_players <<- bind_rows(stored_players, new_players)
+    # Add new players to reactive data
+    data_env$stored_players <- bind_rows(data_env$stored_players, new_players)
+    stored_players(data_env$stored_players)
+    
+    # Preview imported players
+    output$imported_player_preview <- renderDT({
+      datatable(new_players, options = list(pageLength = 10))
+    })
     
     showNotification("Players imported successfully!", type = "message")
-    
   })
   
-  ########## Updating Players ##########
-  # Selecting Names
-  observe({
-    updateSelectInput(session, "edit_player_name", choices = stored_players$FullName)
-  })
-  
-  observe({
-    updateSelectInput(session, "delete_player_id", choices = stored_players$FullName)
-  })
-  
-  # Display player details when selected for editing
+  # Display player details for editing (handles updatePlayerPage)
   observeEvent(input$edit_player_name, {
     req(input$edit_player_name)
     
-    player_idx_edit <- which(stored_players$FullName == input$edit_player_name)
+    player_idx_edit <- which(data_env$stored_players$FullName == input$edit_player_name)
     if (length(player_idx_edit) == 0) {
       output$player_info_display_edit <- renderText("Player not found!")
       return()
     }
     
-    selected_player_edit <- stored_players[player_idx_edit, ]
+    selected_player_edit <- data_env$stored_players[player_idx_edit, ]
     
     output$player_info_display_edit <- renderText({
       paste0("Name: ", selected_player_edit$FullName, "\n",
@@ -2931,30 +2965,19 @@ server <- function(input, output, session) {
              "Throwing Hand: ", selected_player_edit$ThrowingHandedness, "\n",
              "Status: ", selected_player_edit$Status)
     })
-    
-    
-    # Prefill form with current player values
-    updateTextInput(session, "edit_first_name", value = selected_player_edit$FirstName)
-    updateTextInput(session, "edit_last_name", value = selected_player_edit$LastName)
-    updateNumericInput(session, "edit_jersey_number", value = selected_player_edit$JerseyNumber)
-    updateSelectInput(session, "edit_player_type", selected = selected_player_edit$PlayerType)
-    updateNumericInput(session, "edit_grad_year", value = selected_player_edit$GradYear)
-    updateSelectInput(session, "edit_batter_handedness", selected = selected_player_edit$BatterHandedness)
-    updateSelectInput(session, "edit_throwing_handedness", selected = selected_player_edit$ThrowingHandedness)
-    updateSelectInput(session, "edit_status", selected = selected_player_edit$Status)
   })
   
-  # Display player details when selected for deleting
+  # Display player details for deleting (handles updatePlayerPage)
   observeEvent(input$delete_player_id, {
     req(input$delete_player_id)
     
-    player_idx_delete <- which(stored_players$FullName == input$delete_player_id)
+    player_idx_delete <- which(data_env$stored_players$FullName == input$delete_player_id)
     if (length(player_idx_delete) == 0) {
       output$player_info_display_delete <- renderText("Player not found!")
       return()
     }
     
-    selected_player_delete <- stored_players[player_idx_delete, ]
+    selected_player_delete <- data_env$stored_players[player_idx_delete, ]
     
     output$player_info_display_delete <- renderText({
       paste0("Name: ", selected_player_delete$FullName, "\n",
@@ -2967,35 +2990,39 @@ server <- function(input, output, session) {
     })
   })
   
-  # Update player info
+  # Update player info (handles updatePlayerPage)
   observeEvent(input$update_player, {
     req(input$edit_player_name)
     
-    player_idx_update <- which(stored_players$FullName == input$edit_player_name)
+    player_idx_update <- which(data_env$stored_players$FullName == input$edit_player_name)
     if (length(player_idx_update) == 0) {
       showNotification("Player not found!", type = "error")
       return()
     }
     
-    stored_players$FirstName[player_idx_update] <<- input$edit_first_name
-    stored_players$LastName[player_idx_update] <<- input$edit_last_name
-    stored_players$FullName[player_idx_update] <<- paste(input$edit_first_name, input$edit_last_name)
-    stored_players$JerseyNumber[player_idx_update] <<- input$edit_jersey_number
-    stored_players$PlayerType[player_idx_update] <<- input$edit_player_type
-    stored_players$GradYear[player_idx_update] <<- input$edit_grad_year
-    stored_players$BatterHandedness[player_idx_update] <<- input$edit_batter_handedness
-    stored_players$ThrowingHandedness[player_idx_update] <<- input$edit_throwing_handedness
-    stored_players$Status[player_idx_update] <<- input$edit_status
+    # Update the player data
+    data_env$stored_players$FirstName[player_idx_update] <- input$edit_first_name
+    data_env$stored_players$LastName[player_idx_update] <- input$edit_last_name
+    data_env$stored_players$FullName[player_idx_update] <- paste(input$edit_first_name, input$edit_last_name)
+    data_env$stored_players$JerseyNumber[player_idx_update] <- input$edit_jersey_number
+    data_env$stored_players$PlayerType[player_idx_update] <- input$edit_player_type
+    data_env$stored_players$GradYear[player_idx_update] <- input$edit_grad_year
+    data_env$stored_players$BatterHandedness[player_idx_update] <- input$edit_batter_handedness
+    data_env$stored_players$ThrowingHandedness[player_idx_update] <- input$edit_throwing_handedness
+    data_env$stored_players$Status[player_idx_update] <- input$edit_status
+    
+    # Update reactiveVal
+    stored_players(data_env$stored_players)
     
     showNotification("Player updated!", type = "message")
   })
   
-  # Delete Player Pop up
+  # Delete player pop-up (handles updatePlayerPage)
   observeEvent(input$remove_player, {
     req(input$delete_player_id)
-    player_idx_gone <- which(stored_players$FullName == input$delete_player_id)
+    player_idx_gone <- which(data_env$stored_players$FullName == input$delete_player_id)
     if (length(player_idx_gone) == 0) {
-      showNotification("Player ID not found!", type = "error")
+      showNotification("Player not found!", type = "error")
       return()
     }
     
@@ -3003,24 +3030,37 @@ server <- function(input, output, session) {
     showModal(modalDialog(
       title = "Confirm Deletion",
       paste("Are you sure you want to delete", input$delete_player_id, "?"),
-      easyClose = FALSE, # Prevent accidental closing
+      easyClose = FALSE,
       footer = tagList(
-        modalButton("Cancel"),  # Closes modal
-        actionButton("confirm_remove_player", "Confirm", class = "btn-danger") # Triggers deletion
+        modalButton("Cancel"),
+        actionButton("confirm_remove_player", "Confirm", class = "btn-danger")
       )
     ))
   })
   
-  # Confirm Delete Player
+  # Confirm delete player (handles updatePlayerPage)
   observeEvent(input$confirm_remove_player, {
-    player_idx_gone <- which(stored_players$FullName == input$delete_player_id)
-    stored_players <<- stored_players[-player_idx_gone, ]
+    player_idx_gone <- which(data_env$stored_players$FullName == input$delete_player_id)
+    if (length(player_idx_gone) == 0) {
+      showNotification("Player not found!", type = "error")
+      return()
+    }
+    
+    # Delete the player
+    data_env$stored_players <- data_env$stored_players[-player_idx_gone, ]
+    stored_players(data_env$stored_players)
+    
     showNotification("Player deleted!", type = "message")
     removeModal()
-    updateNumericInput(session, "delete_player_id", value = NULL)
+    updateSelectInput(session, "delete_player_id", selected = "")
   })
   
-  # Merge Players
+  # Save rosters
+  observeEvent(input$save_rosters, {
+    write.csv(data_env$stored_players, "data/stored_players.csv", row.names = FALSE)
+    data_env$last_saved <- Sys.time()
+    showNotification("Rosters saved!", type = "message")
+  })
   
   ########## All Players Page Functioning ##########  
   
@@ -3058,7 +3098,7 @@ server <- function(input, output, session) {
   observeEvent(input$go_home, { app_state$page <- "start" })
   observeEvent(input$go_back, { app_state$page <- "start" })
   
-  
+  }  
 }
 
 shinyApp(ui, server)
