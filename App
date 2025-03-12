@@ -1,0 +1,3064 @@
+#division3teams <- read_xlsx("division3baseballteams.xlsx")
+#Hobartteam <- read_xlsx("baseballapp/hobarttestroster.xlsx")
+#UofRteam <- read_xlsx("baseballapp/UofRTestRoster.xlsx")
+
+library(tidyverse)
+library(shiny)
+library(DT)
+library(readxl)
+library(DBI)
+library(RSQLite)
+library(tidyr)
+library(ggplot2)
+library(rmarkdown)
+options(shiny.reactlog = TRUE)
+#shiny::reactlogShow()
+
+app_styles <- tags$head(
+  tags$style(HTML("
+    .centered-title { 
+    text-align: center; 
+    }
+    
+    .wide-btn {
+    width: 100%; 
+    padding: 20px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+    }
+    
+    .centered-btn {
+    width: 50%;
+    margin: 0 auto;
+    display: block; 
+    }
+    
+    .back-btn {
+    width: 50%;
+    margin: 0 auto;
+    display: block; 
+    background-color: #f44336;
+    color: white;
+    }
+    
+  .stretch-radio .shiny-options-group {
+    display: flex;
+    flex-wrap: wrap; /* Allows wrapping if needed */
+    width: 100%;
+  }
+
+  .stretch-radio .shiny-options-group label {
+    flex-grow: 1;  /* Makes them stretch evenly */
+    text-align: center;
+    padding: 10px;
+    border: 2px solid #000;
+    border-radius: 5px;
+    margin: 2px;
+    cursor: pointer;
+    background-color: white;
+  }
+
+  .stretch-radio .shiny-options-group input[type='radio'] {
+    display: none; /* Hide the default radio button */
+  }
+
+  .stretch-radio .shiny-options-group input[type='radio']:checked + label {
+    background-color: #007BFF;
+    color: white;
+    border-color: #007BFF;
+  }
+  
+    .score-team { 
+    font-size: 20px; 
+    font-weight: bold; 
+    text-align: center; 
+    }
+  
+  .score-runs { 
+    font-size: 16px; 
+    text-align: center; 
+  }
+  "))
+)
+
+
+
+# is it possible to have different r files for different functions or parts of the app, to keep it clean and separate?
+
+## Edit player and delete player button, maybe have to have page for edit player
+
+
+## Add fielders choice
+## Runners should be able to get out during the middle of the play
+
+
+# Constants
+player_type <- c("","Pitcher", "Hitter", "Two-Way")
+batter_handed <- c("","Right", "Left", "Switch")
+throwing_handed <- c("","Right", "Left")
+player_status <- c("","Active", "Graduated", "Transferred", "Redshirt")
+the_pitch_types <- c("FB", "CB", "SL", "CH", "SP", "CT", "OTH")
+ball_flight_types <- c( "Ground Ball", "Line Drive", "Fly Ball", "Pop-Up")
+contact_quality_types <- c("Weak", "Average", "Hard")
+hit_outcomes <- c("Out", "Double Play", "Triple Play", "Single", "Double", "Triple", "Homerun", "Error", "Sacrifice Fly")
+advance_reasons <- c("Steal", "Wild Pitch", "Baulk", "Error")
+
+
+# Home Page - User Interface
+startPage <- function() {
+  fluidPage(
+    titlePanel(div("Welcome", class = "centered-title")),
+    column(6, actionButton("create_new_event", "Play", class = "wide-btn"), offset = 3),
+    column(6, actionButton("stats", "Statistics", class = "wide-btn"), offset = 3),
+    column(6, actionButton("go_to_list", "All Players", class = "wide-btn"), offset = 3),
+    column(6, actionButton("settings", "Settings", class = "wide-btn"), offset = 3),
+    column(6, actionButton("check_button", "Temporary Check Button", class = "wide-btn"), offset = 3)
+  )
+}
+
+# Settings Page - User Interface
+settingsPage <- function() {
+  #Tab to find close to duplicate players
+  #Way to combine players data (in case there are close to duplicate players)
+}
+
+# Input Single Player Page - User Interface
+inputPage <- function(current_year) {
+  fluidPage(
+    titlePanel(div("Enter Player Information", class = "centered-title")),
+    selectInput("team_selection", "Team", choices = division3teams$CollegeName),
+    textInput("first_name", "First Name:"),
+    textInput("last_name", "Last Name:"),
+    numericInput("jersey_number", "Jersey Number:", value = NULL, min = 0, max = 99),
+    selectInput("player_type", "Player Type:", choices = player_type),
+    numericInput("grad_year", "Graduation Year:", value = NULL, min = current_year),
+    selectInput("batter_handedness", "Batter Handedness:", choices = batter_handed),
+    selectInput("throwing_handedness", "Throwing Handedness:", choices = throwing_handed),
+    actionButton("confirm_player", "Confirm", class = "centered-btn"),
+    actionButton("go_to_list", "Back", class = "back-btn")
+  )
+}
+
+# All Players List Page - User Interface
+listPage <- function() {
+  fluidPage(
+    titlePanel(div("List of Players", class = "centered-title")),
+    fluidRow(
+      column(3, actionButton("go_home", "Home", class = "wide-btn")),
+      column(3, actionButton("add_player", "Add Player", class = "wide-btn")),
+      column(3, actionButton("player_info", "Update Player", class = "wide-btn")),
+      column(3, actionButton("import_excel_page", "Import Excel", class = "wide-btn"))
+    ),
+    DTOutput("player_list")
+  )
+}
+
+# Bulk Import Page For Excel File - User Interface
+importPage <- function() {
+  fluidPage(
+    titlePanel(div("Import Players from Excel", class = "centered-title")),
+    fileInput("excel_file", "Choose Excel File", accept = ".xlsx"),
+    actionButton("import_players", "Import", class = "centered-btn"),
+    actionButton("go_to_list", "Back", class = "back-btn"),
+    br(), br(),
+    DTOutput("imported_player_preview")
+  )
+}
+
+# Update Player Page
+updatePlayerPage <- function() {
+  # Edit/Delete UI
+  fluidPage(
+    fluidRow(
+      column(2, actionButton("go_home", "Home", class = "wide-btn")),
+      column(2, actionButton("go_to_list", "Back", class = "wide-btn"))
+    ),
+    fluidRow(
+      column(4, 
+             paste("Edit Player Information"),
+             selectInput("edit_player_name", "Select Player to Edit", choices = stored_players$FullName, selected = NULL), # FullName lookup
+             verbatimTextOutput("player_info_display_edit"), # Show current player info
+             
+             textInput("edit_first_name", "First Name", ""),
+             textInput("edit_last_name", "Last Name", ""),
+             numericInput("edit_jersey_number", "Jersey Number", value = NULL),
+             selectInput("edit_player_type", "Player Type", choices = c("Batter", "Pitcher", "Two-Way")),
+             numericInput("edit_grad_year", "Graduation Year", value = NULL),
+             selectInput("edit_batter_handedness", "Batting Hand", choices = c("Right", "Left", "Switch")),
+             selectInput("edit_throwing_handedness", "Throwing Hand", choices = c("Right", "Left")),
+             selectInput("edit_status", "Status", choices = c("Active", "Injured", "Inactive")),
+             
+             actionButton("update_player", "Confirm Update", class = "wide-btn")
+      ),
+      column(4, 
+             paste("Delete Player"),
+             selectInput("delete_player_id", "Select Player to Delete", choices = stored_players$FullName, selected = NULL),
+             verbatimTextOutput("player_info_display_delete"),
+             actionButton("remove_player", "Delete Player", class = "wide-btn")
+      ),
+      column(4,
+             paste("Merge Players Data")
+      )
+    )
+  )  
+}
+
+# Stats Page - User Interface
+statPage <- function() {
+  fluidPage(
+    titlePanel(div("Statistics", class = "centered-title")),
+    fluidRow(
+      column(2, actionButton("go_home", "Home", class = "wide-btn")),
+      column(10,  # Shift content to the right
+             h3("Teams Overview"),
+             DTOutput("team_stats_table")
+      )
+    )
+  )
+}
+
+# Team Stat Page 
+teamStatsPage <- function() {
+  fluidPage(
+    titlePanel(div(textOutput("team_title"), class = "centered-title")),
+    fluidRow(
+      column(2, actionButton("back_to_stats", "Back to All Teams", class = "wide-btn")),
+      column(10,
+             p("Team ID: ", textOutput("team_id_display", inline = TRUE))
+      )
+    ),
+    sidebarLayout(
+      sidebarPanel(
+        width = 3,
+        h3("Players"),
+        DTOutput("team_players_table")
+      ),
+      mainPanel(
+        width = 9,
+        h3("Team Statistics"),
+        p("Placeholder for team statistics (Record, Pitching Leaderboard, Batting Leaderboard)"),
+        br()
+      )
+    )
+  )
+}
+
+# Selecting New Event - User Interface
+newEventPage <- function() {
+  fluidPage(
+    titlePanel(div("Game Type", class = "centered-title")),
+    actionButton("type_game", "Game", class = "centered-btn"),
+    actionButton("type_scrimmage", "Scrimmage", class = "centered-btn"),
+    actionButton("type_practice", "Practice", class = "centered-btn"),
+    actionButton("go_back", "Back", class = "back-btn")
+  )
+}
+
+# Practice Input Page - User Interface
+practicePage <- function() {}
+
+# Scrimmage Imput Page - User Interface
+scrimmagePage <- function() {}
+
+# Setting Lineups for Game Page - User Interface 
+lineupPage <- function() {
+  fluidPage(
+    fluidRow(
+      column(2, actionButton("go_home", "Home", class = "wide-btn")),
+      column(8, titlePanel(div("Set Your Lineups", class = "centered-title")))
+    ),
+    fluidRow(
+      column(4,
+             selectInput("home_team", "Home Team", choices = division3teams$CollegeName),
+             selectInput("ht_1spot", "1", choices = NULL),
+             selectInput("ht_2spot", "2", choices = NULL),
+             selectInput("ht_3spot", "3", choices = NULL),
+             selectInput("ht_4spot", "4", choices = NULL),
+             selectInput("ht_5spot", "5", choices = NULL),
+             selectInput("ht_6spot", "6", choices = NULL),
+             selectInput("ht_7spot", "7", choices = NULL),
+             selectInput("ht_8spot", "8", choices = NULL),
+             selectInput("ht_9spot", "9", choices = NULL),
+             selectInput("ht_starting_pitcher", "SP", choices = NULL),
+             offset = 2
+      ),
+      column(4,
+             selectInput("away_team", "Away Team", choices = division3teams$CollegeName),
+             selectInput("at_1spot", "1", choices = NULL),
+             selectInput("at_2spot", "2", choices = NULL),
+             selectInput("at_3spot", "3", choices = NULL),
+             selectInput("at_4spot", "4", choices = NULL),
+             selectInput("at_5spot", "5", choices = NULL),
+             selectInput("at_6spot", "6", choices = NULL),
+             selectInput("at_7spot", "7", choices = NULL),
+             selectInput("at_8spot", "8", choices = NULL),
+             selectInput("at_9spot", "9", choices = NULL),
+             selectInput("at_starting_pitcher", "SP", choices = NULL),
+             offset = 1
+      )
+    ),
+    column(12, actionButton("to_game", "Confirm Lineups", class = "wide-btn"))
+  )
+}
+
+# Game Input Page - User Interface
+gamePage <- function() {
+  fluidPage(
+    tags$style(HTML("
+      .circle { display: inline-block; width: 15px; height: 15px; border-radius: 50%; margin: 2px; border: 1px solid black; }
+      .strike-circle { background-color: red; }
+      .ball-circle { background-color: green; }
+      .out-circle { background-color: black; }
+      .score-team { font-size: 20px; font-weight: bold; text-align: center; }
+      .score-runs { font-size: 16px; text-align: center; }
+      .inning-display { font-size: 18px; text-align: center; }
+    ")),
+    
+    # Tabs for Input and Short-Term Table
+    tabsetPanel(
+      id = "game_tabs",
+      
+      # First Tab - Input Page
+      tabPanel("Pitch Input",
+               # Mini scoreboard
+               fluidRow(
+                 column(3,
+                        selectInput("current_hitter", "Hitter", choices = NULL),
+                        selectInput("current_pitcher", "Pitcher", choices = NULL)),
+                 column(3,
+                        div(class = "score-team", "Away"),
+                        div(class = "score-runs", textOutput("away_score")),
+                        div(class = "score-team", "Home"),
+                        div(class = "score-runs", textOutput("home_score"))),
+                 column(2, 
+                        plotOutput("bases_graphic", height = "95px")),
+                 column(1,
+                        div(class = "inning-display",
+                            textOutput("inning_number"),
+                            uiOutput("inning_arrow"))),
+                 column(3,
+                        uiOutput("count_and_outs"))
+               ),
+               column(6,
+                      plotOutput("strike_zone", click = "plot_click"),
+                      sliderInput("pitch_speed", "", min = 65, max = 95, value = 65, width = "100%"),
+                      div(class = "stretch-radio",radioButtons("pitch_type", "", choices = the_pitch_types, selected = NA, inline = TRUE))
+               ),
+               column(6,
+                      actionButton("called_strike", "Called Strike", class = "wide-btn"),
+                      actionButton("swing_strike", "Swinging Strike", class = "wide-btn"),
+                      actionButton("foul_ball", "Foul Ball", class = "wide-btn"),
+                      actionButton("ball", "Ball", class = "wide-btn"),
+                      actionButton("hit_by_pitch", "Hit By Pitch", class = "wide-btn"),
+                      actionButton("ball_in_play", "Ball in Play", class = "wide-btn"),
+                      actionButton("runners_advance", "Runners Advance", class = "wide-btn"),
+                      actionButton("clear_inputs", "Reset", class = "wide-btn")
+               ),
+      ),
+      
+      # Second Tab - Short-Term Table
+      tabPanel("Half Inning Pitches",
+               DTOutput("short_term_table")
+      ),
+      
+      # Third Tab - Visual of Lineups
+      tabPanel("Lineups",
+               fluidPage(
+                 column(4,
+                        tableOutput("home_team_table"),
+                        actionButton("home_team_change", "Player Substitute"),
+                        offset = 2
+                 ),
+                 column(4,
+                        tableOutput("away_team_table"),
+                        actionButton("away_team_change", "Player Substitute"),
+                        offset = 2
+                 )
+               )
+      ),
+      
+      # Fourth Tab - Settings Page
+      tabPanel("Settings",
+               actionButton("end_game", "End Game Early"),
+               actionButton("commit_pitches", "Save to Database")
+      )
+    )
+  )
+}
+
+# See Pitches Page
+pitchesPage <- function() {
+  fluidPage(
+    fluidRow(actionButton("back_to_game", "Next Inning", class = "wide-btn")),
+    fluidRow(DTOutput("short_term_table"))
+  )
+}
+
+# Baseball field gamplay look
+draw_baseball_field <- function() {
+  
+  # Pitcher's mound location
+  mound_x <- 60.5 * cos(pi/4)  # ≈ 42.8
+  mound_y <- 60.5 * sin(pi/4)  # ≈ 42.8
+  # Infield Dirt Full Circle
+  full_dirt <- data.frame(
+    x = 100 + mound_x + 95 * cos(seq(0, 2 * pi, length.out = 100)),
+    y = 100 + mound_y + 95 * sin(seq(0, 2 * pi, length.out = 100))
+  )
+  #Foul Territory
+  foul_area_third <- data.frame(
+    x = c(40, 96, 96, 40),
+    y = c(40, 40, 250, 250)
+  )
+  foul_area_first <- data.frame(
+    x = c(40, 250, 250, 40),
+    y = c(40, 40, 96, 96)
+  )
+  # Infield Grass
+  diamond <- data.frame(
+    x = c(103, 187, 187, 103),
+    y = c(103, 103, 187, 187)
+  )
+  #Home Plate Dirt
+  home_plate_dirt <- data.frame(
+    x = 102 + 13 * cos(seq(0, 2 * pi, length.out = 100)),
+    y = 102 + 13 * sin(seq(0, 2 * pi, length.out = 100))
+  )
+  first_base_dirt <- data.frame(
+    x = 190 + 13 * cos(seq(0, 2 * pi, length.out = 100)),
+    y = 100 + 13 * sin(seq(0, 2 * pi, length.out = 100))
+  )
+  second_base_dirt <- data.frame(
+    x = 190 + 13 * cos(seq(0, 2 * pi, length.out = 100)),
+    y = 190 + 13 * sin(seq(0, 2 * pi, length.out = 100))
+  )
+  third_base_dirt <- data.frame(
+    x = 100 + 13 * cos(seq(0, 2 * pi, length.out = 100)),
+    y = 190 + 13 * sin(seq(0, 2 * pi, length.out = 100))
+  )
+  # Bases as points
+  bases <- data.frame(
+    x = c(102, 192, 192, 102),
+    y = c(102, 102, 192, 192)
+  )
+  # Foul lines from home plate
+  foul_line1 <- data.frame(x = c(100, 425), y = c(100, 100))
+  foul_line2 <- data.frame(x = c(100, 100), y = c(100, 425))
+  # Mount dirt
+  mound_dirt <- data.frame(
+    x = 100 + mound_x + 9 * cos(seq(0, 2 * pi, length.out = 100)),
+    y = 100 + mound_y + 9 * sin(seq(0, 2 * pi, length.out = 100))
+  )
+  # Outfield fence as an arc (using polar coordinates)
+  # Define the points
+  p1_bsblfd <- c(100, 425)
+  p2_bsblfd <- c(382.84, 382.84)
+  p3_bsblfd <- c(425, 100)
+  
+  # Create a function to generate points along the arc
+  # Find the center of the circle
+  center_bsblfd <- c((p1_bsblfd[1] + p3_bsblfd[1]) / 2, (p1_bsblfd[2] + p3_bsblfd[2]) / 2)
+  # Calculate the radius of the circle
+  radius_bsblfd <- sqrt((p1_bsblfd[1] - center_bsblfd[1])^2 + (p1_bsblfd[2] - center_bsblfd[2])^2)
+  # Generate the angles for the arc (between p1 and p3)
+  theta_bsblfd <- seq(atan2(p1_bsblfd[2] - center_bsblfd[2], p1_bsblfd[1] - center_bsblfd[1]),
+                      atan2(p3_bsblfd[2] - center_bsblfd[2], p3_bsblfd[1] - center_bsblfd[1]), length.out = 100)
+  # Calculate the coordinates along the arc
+  arc_points_bsblfd <- data.frame(
+    x = center_bsblfd[1] + radius_bsblfd * cos(theta_bsblfd),
+    y = center_bsblfd[2] + radius_bsblfd * sin(theta_bsblfd)
+  )
+  
+  
+  # Build the plot
+  p <- ggplot() +
+    theme_void() +
+    coord_fixed() +
+    theme(panel.background = element_rect(fill = "darkgreen", color = NA)) +
+    
+    geom_polygon(data = full_dirt, aes(x = x, y =y),
+                 fill = "tan", size = 1) +
+    geom_polygon(data = diamond, aes(x = x, y = y),
+                 fill = "darkgreen", size = 1) +
+    geom_polygon(data = first_base_dirt, aes(x = x, y = y),
+                 fill = "tan", size = 1) +
+    geom_polygon(data = second_base_dirt, aes(x = x, y = y),
+                 fill = "tan", size = 1) +
+    geom_polygon(data = third_base_dirt, aes(x = x, y = y),
+                 fill = "tan", size = 1) +
+    geom_polygon(data = foul_area_third, aes(x = x, y = y), 
+                 fill = "darkgreen", size = 1) +
+    geom_polygon(data = foul_area_first, aes(x = x, y = y), 
+                 fill = "darkgreen", size = 1) +
+    geom_polygon(data = home_plate_dirt, aes(x = x, y = y),
+                 fill = "tan", size = 1) +
+    geom_polygon(data = mound_dirt, aes(x = x, y = y),
+                 fill = "tan", size = 1) +
+    geom_point(data = bases, aes(x = x, y = y),
+               color = "white", size = 2, shape = 15) +
+    geom_line(data = foul_line1, aes(x = x, y = y), color = "white") +
+    geom_line(data = foul_line2, aes(x = x, y = y), color = "white") +
+    geom_path(data = arc_points_bsblfd, aes(x = x, y = y), color = "yellow", size = 1) +
+    
+    xlim(40, 500) + ylim(40,500) +
+    coord_fixed()
+  
+  return(p)
+}
+
+# End of game summary page (Left as skeleton so we can add stats that we want)
+gameSummaryPage <- function() {
+  fluidPage(
+    titlePanel(div("Game Summary", class = "centered-title")),
+    fluidRow(
+      column(12, actionButton("go_home_from_summary", "Home", class = "wide-btn"))
+    ),
+    fluidRow(
+      column(12,
+             h3("Final Score"),
+             p(paste("Away:", textOutput("summary_away_score", inline = TRUE))),
+             p(paste("Home:", textOutput("summary_home_score", inline = TRUE))),
+             h3("Game Stats"),
+             p("Placeholder for game statistics (e.g., total pitches, hits, etc.)")
+      )
+    )
+  )
+}
+
+ui <- fluidPage(
+  app_styles,
+  uiOutput("dynamicUI")
+)
+
+
+server <- function(input, output, session) {
+  #reactlog::reactlog_enable()
+  current_year <- as.numeric(format(Sys.Date(), "%Y"))
+  current_date <- format(Sys.Date(), "%m/%d/%Y")
+  observeEvent(input$check_button, {
+    print(stored_players)
+  })
+  
+  ########## Start Page Functioning ##########  
+  observeEvent(input$create_new_event, { app_state$page <- "new_event" })
+  observeEvent(input$stats, {app_state$page <- "stat"})
+  observeEvent(input$go_to_list, { app_state$page <- "list" })
+  
+  # Makes app to start on start page
+  app_state <- reactiveValues(
+    page = "start"
+  )
+  
+  ########## Stats Page Functioning ##########
+  # Reactive value to store the selected team
+  selected_team <- reactiveValues(team_id = NULL, team_name = NULL)
+  
+  # Reactive value for selected player
+  selected_player <- reactiveValues(player_id = NULL, full_name = NULL, player_type = NULL, jersey_number = NULL, throwing_hand = NULL)
+  
+  # Render the team stats table with single row selection
+  output$team_stats_table <- renderDT({
+    req(exists("division3teams"))
+    datatable(
+      division3teams %>% 
+        select(CollegeName, TeamID),
+      options = list(
+        pageLength = 10,
+        order = list(list(0, "asc")),
+        rowCallback = JS(
+          "function(row, data, index) {",
+          "  $(row).css('cursor', 'pointer');",  # Make rows look clickable
+          "}"
+        )
+      ),
+      selection = "single",  # Allow only one row to be selected
+      rownames = FALSE,
+      colnames = c("Team Name", "Team ID")
+    )
+  })
+  
+  # Observe row clicks and navigate to team page
+  observeEvent(input$team_stats_table_rows_selected, {
+    selected_row <- input$team_stats_table_rows_selected
+    if (!is.null(selected_row)) {
+      selected_team$team_id <- division3teams$TeamID[selected_row]
+      selected_team$team_name <- division3teams$CollegeName[selected_row]
+      app_state$page <- "team_stats"  # Navigate to team-specific page
+    }
+  })
+  
+  # Render team-specific page elements
+  output$team_title <- renderText({
+    req(selected_team$team_name)
+    paste("Statistics for", selected_team$team_name)
+  })
+  
+  output$team_id_display <- renderText({
+    req(selected_team$team_id)
+    as.character(selected_team$team_id)
+  })
+  
+  output$team_players_table <- renderDT({
+    req(selected_team$team_id)
+    team_players <- stored_players %>%
+      filter(TeamID == selected_team$team_id) %>%
+      select(FullName, JerseyNumber, PlayerType)
+    datatable(
+      team_players,
+      options = list(
+        pageLength = 10,
+        order = list(list(0, "asc")),  # Sort by FullName
+        rowCallback = JS(
+          "function(row, data, index) {",
+          "  $(row).css('cursor', 'pointer');",
+          "}"
+        )
+      ),
+      selection = "single",  # Single row selection
+      rownames = FALSE,
+      colnames = c("Player Name", "Jersey #", "Type")
+    )
+  })
+  
+  # Pitcher Report Function 
+  pitcherReportUI <- function(player_data, stats) {
+    tagList(
+      # Header Section with Spray Chart on the Right
+      fluidRow(
+        column(6,
+               h3(player_data$full_name),
+               p(paste("#", player_data$jersey_number)),
+               p(ifelse(player_data$throwing_hand == "Left", "LHP", ifelse(player_data$throwing_hand == "Right", "RHP", "")))
+        ),
+        column(6,
+               plotOutput("pitcher_spray_chart", height = "400px", width = "400px")
+        )
+      ),
+      
+      # Pitch Type Distribution and Velocities
+      fluidRow(
+        column(4,
+               h4("FB"),
+               p("%", style = "font-weight: bold;"),  # FB velocity range
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #f0f0f0;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "LHH"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "Total"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "RHH")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$FB$LHH, "%")),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$FB$Total, "%")),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$FB$RHH, "%"))
+                 )
+               )
+        ),
+        column(4,
+               h4("CB"),
+               p("%", style = "font-weight: bold;"),  # CB velocity range
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #f0f0f0;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "LHH"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "Total"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "RHH")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$CB$LHH, "%")),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$CB$Total, "%")),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$CB$RHH, "%"))
+                 )
+               )
+        ),
+        column(4,
+               h4("CH"),
+               p("%", style = "font-weight: bold;"),  # CH velocity range
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #f0f0f0;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "LHH"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "Total"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "RHH")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$CH$LHH, "%")),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$CH$Total, "%")),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$pitch_types$CH$RHH, "%"))
+                 )
+               )
+        )
+      ),
+      
+      # Pitching Statistics (Additional Metrics)
+      h4("Additional Pitching Metrics"),
+      tags$table(
+        style = "width: 100%; border-collapse: collapse; text-align: left;",
+        tags$tr(
+          tags$th("Strike %"), tags$td(""),
+          tags$th("Called Strike %"), tags$td(""),
+          tags$th("Swing & Miss %"), tags$td(""),
+          tags$th("% of Total Strikeouts"), tags$td("")
+        ),
+        tags$tr(
+          tags$th("Chase Pitch Swing %"), tags$td(""),
+          tags$th("Hard Hit %"), tags$td(""),
+          tags$th("Weak Hit %"), tags$td(""),
+          tags$th("Ground Ball %"), tags$td("")
+        )
+      ),
+      
+      # Pitching Statistics (Main Metrics)
+      h4("Pitching Statistics"),
+      tags$table(
+        style = "width: 100%; border-collapse: collapse; text-align: center;",
+        tags$tr(
+          tags$th(style = "border: 1px solid black; padding: 5px;", "Pitches Per Inn"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "First Pitch K%"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "ERA"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "WHIP"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "Runs Per 9"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "Hits Per 9"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "Walks Per 9"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "Strikeouts Per 9"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "BR Per 9"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "BA Against"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "OBP Against"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "QABs Against")
+        ),
+        tags$tr(
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitches_per_inning),
+          tags$td(style = "border: 1px solid black; padding: 5px;", paste(stats$first_pitch_strike_pct, "%")),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$era),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$whip),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$runs_per_9),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$hits_per_9),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$walks_per_9),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$strikeouts_per_9),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$br_per_9),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$ba_against),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$obp_against),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$qabs_against)
+        )
+      ),
+      
+      # Pitch Selection
+      h4("Pitch Selection"),
+      tags$table(
+        style = "width: 100%; border-collapse: collapse; text-align: center;",
+        tags$tr(
+          tags$th(style = "border: 1px solid black; padding: 5px;", colspan = 4, "Early"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", colspan = 4, "Behind"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", colspan = 4, "Ahead")
+        ),
+        tags$tr(
+          tags$th(style = "border: 1px solid black; padding: 5px;", "0-0"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "1-0"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "0-1"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "1-1"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "2-0"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "2-1"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "3-0"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "3-1"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "0-2"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "1-2"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "2-2"),
+          tags$th(style = "border: 1px solid black; padding: 5px;", "3-2")
+        ),
+        tags$tr(
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$early$`0-0`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$early$`1-0`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$early$`0-1`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$early$`1-1`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$behind$`2-0`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$behind$`2-1`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$behind$`3-0`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$behind$`3-1`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$ahead$`0-2`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$ahead$`1-2`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$ahead$`2-2`),
+          tags$td(style = "border: 1px solid black; padding: 5px;", stats$pitch_selection$ahead$`3-2`)
+        )
+      ),
+      
+      # Summary Row
+      h4("Summary"),
+      tags$table(
+        style = "width: 100%; border-collapse: collapse; text-align: center;",
+        tags$tr(
+          tags$th(style = "border: 1px solid black; padding: 5px;", "Last 25"),
+          tags$td(style = "border: 1px solid black; padding: 5px;", "")
+        ),
+        tags$tr(
+          tags$th(style = "border: 1px solid black; padding: 5px;", "All Time"),
+          tags$td(style = "border: 1px solid black; padding: 5px;", "")
+        )
+      )
+    )
+  }
+  
+  # Hitter Report Function
+  hitterReportUI <- function(player_data) {
+    tagList(
+      # Top Section: Player Info and Heatmap
+      fluidRow(
+        column(6,
+               h3(strong(player_data$full_name)),
+               p(paste("#", player_data$jersey_number)),
+               p(strong("Total ABs: "), ""),
+               p(strong("OBP: "), ""),
+               p(strong("BA: "), ""),
+               p(strong("QAB Score: "), "")
+        ),
+        column(6,
+               plotOutput("player_heatmap", height = "300px", width = "100%")
+        )
+      ),
+      br(),
+      
+      # Middle Section: Heart/Chase/Overall Tables with Inline Row Labels
+      fluidRow(
+        # Heart Table with Row Labels
+        column(4,
+               h4("Heart"),
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #e0e0e0;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 12px;", ""),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "LHP"),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "Total"),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "RHP")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Swing %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Swing & Miss %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Hard Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Weak Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 )
+               )
+        ),
+        # Chase Table with Row Labels
+        column(4,
+               h4("Chase"),
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #e0e0e0;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 12px;", ""),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "LHP"),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "Total"),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "RHP")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Swing %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Swing & Miss %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Hard Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Weak Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 )
+               )
+        ),
+        # Overall Table with Row Labels
+        column(2,
+               h4("Overall"),
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center; background-color: #e0e0e0;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 12px;", ""),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "LHP"),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "Total"),
+                   tags$th(style = "border: 1px solid black; padding: 5px; font-size: 14px;", "RHP")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Swing %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Swing & Miss %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;","Hard Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "Weak Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px; font-size: 11px;", "")
+                 )
+               )
+        )
+      ),
+      br(),
+      
+      # Larger Middle Section: RISp/No RISp and LHP/VS/RHP in One Row
+      fluidRow(
+        # RISp and No RISp Table with Row Variables
+        column(6,
+               h4("RISP / No RISP"),
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "RISP"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "No RISP")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "BA"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "OBP"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Chase %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Success Rate"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Advance Runner Rate"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 )
+               ),
+               br(),
+               # Spray Chart Below RISp/No RISp
+               plotOutput("hitter_spray_chart", height = "400px", width = "100%")
+        ),
+        # VS Table with Row Variables in Middle Column
+        column(6,
+               h4("LHP vs RHP"),
+               tags$table(
+                 style = "width: 100%; border-collapse: collapse; text-align: center;",
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "LHP"),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$th(style = "border: 1px solid black; padding: 5px;", "RHP")
+                 ),
+                 # Early Counts Subheader
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 3px; font-size: 12px; text-align: center;", ""),
+                   tags$th(style = "border: 1px solid black; padding: 3px; font-size: 12px; text-align: center;", "Early Counts"),
+                   tags$th(style = "border: 1px solid black; padding: 3px; font-size: 12px; text-align: center;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "AB #"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "OBP %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Hard Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Strike Take %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Chase %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Heart Zone Take %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Heart Zone Barrel %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 # 2+ Strike Counts Subheader
+                 tags$tr(
+                   tags$th(style = "border: 1px solid black; padding: 3px; font-size: 12px; text-align: center;", ""),
+                   tags$th(style = "border: 1px solid black; padding: 3px; font-size: 12px; text-align: center;", "2+ Strike Counts"),
+                   tags$th(style = "border: 1px solid black; padding: 3px; font-size: 12px; text-align: center;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "AB #"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "OBP %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Hard Hit %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Strike Take %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Chase %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Heart Zone Take %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 ),
+                 tags$tr(
+                   tags$td(style = "border: 1px solid black; padding: 5px;", ""),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "Heart Zone Barrel %"),
+                   tags$td(style = "border: 1px solid black; padding: 5px;", "")
+                 )
+               )
+        )
+      ),
+      br()
+    )
+  }
+  
+  # Observe player row clicks and show modal
+  observeEvent(input$team_players_table_rows_selected, {
+    selected_row <- input$team_players_table_rows_selected
+    if (!is.null(selected_row)) {
+      team_players <- stored_players %>%
+        filter(TeamID == selected_team$team_id) %>%
+        select(PlayerID, FullName, JerseyNumber, PlayerType, ThrowingHandedness)
+      selected_player$player_id <- team_players$PlayerID[selected_row]
+      selected_player$full_name <- team_players$FullName[selected_row]
+      selected_player$player_type <- team_players$PlayerType[selected_row]
+      selected_player$jersey_number <- team_players$JerseyNumber[selected_row]
+      selected_player$throwing_handedness <- team_players$ThrowingHandedness[selected_row]
+      
+      # Prepare player data for reuse
+      player_data <- list(
+        full_name = selected_player$full_name,
+        player_type = selected_player$player_type,
+        jersey_number = selected_player$jersey_number,
+        throwing_hand = selected_player$throwing_handedness
+      )
+      
+      # Skeleton stats for pitchers
+      stats <- list(
+        pitches_per_inning = "TBD",
+        first_pitch_strike_pct = "TBD",
+        era = "TBD",
+        whip = "TBD",
+        runs_per_9 = "TBD",
+        hits_per_9 = "TBD",
+        strikeouts_per_9 = "TBD",
+        walks_per_9 = "TBD",
+        br_per_9 = "TBD",
+        ba_against = "TBD",
+        obp_against = "TBD",
+        qabs_against = "TBD",
+        pitch_types = list(
+          FB = list(LHH = "TBD", Total = "TBD", RHH = "TBD"),
+          CB = list(LHH = "TBD", Total = "TBD", RHH = "TBD"),
+          CH = list(LHH = "TBD", Total = "TBD", RHH = "TBD")
+        ),
+        pitch_selection = list(
+          early = list("0-0" = "TBD", "1-0" = "TBD", "0-1" = "TBD", "1-1" = "TBD"),
+          behind = list("2-0" = "TBD", "2-1" = "TBD", "3-0" = "TBD", "3-1" = "TBD"),
+          ahead = list("0-2" = "TBD", "1-2" = "TBD", "2-2" = "TBD", "3-2" = "TBD")
+        )
+      )
+      
+      # Determine report content based on player type
+      report_content <- if (selected_player$player_type == "Hitter") {
+        hitterReportUI(player_data)
+      } else if (selected_player$player_type == "Pitcher") {
+        pitcherReportUI(player_data, stats)
+      } else if (selected_player$player_type == "Two-Way") {
+        tabsetPanel(
+          tabPanel("Hitter Report", hitterReportUI(player_data)),
+          tabPanel("Pitcher Report", pitcherReportUI(player_data, stats))
+        )
+      }
+      
+      # Show modal if player type is valid
+      if (!is.null(report_content)) {
+        showModal(modalDialog(
+          title = paste("Player Report:", selected_player$full_name),
+          report_content,
+          footer = tagList(
+            if (selected_player$player_type %in% c("Pitcher", "Two-Way")) {
+              actionButton("export_pitcher_report", "Export Pitcher Report")
+            },
+            if (selected_player$player_type %in% c("Hitter", "Two-Way")) {
+              actionButton("export_hitter_report", "Export Hitter Report")
+            },
+            actionButton("close_report", "Close")
+          ),
+          easyClose = TRUE,
+          size = "l"
+        ))
+      } else {
+        showNotification("Invalid player type.", type = "error")
+      }
+    }
+  })
+  
+  # Render the spray chart for the pitcher report
+  output$pitcher_spray_chart <- renderPlot({
+    req(selected_player$player_id, selected_player$player_type)
+    generate_spray_chart(selected_player$player_id, role = ifelse(selected_player$player_type %in% c("Pitcher", "Two-Way"), "pitcher", "hitter"))
+  })
+  
+  # Close modal
+  observeEvent(input$close_report, {
+    removeModal()
+  })
+  
+  # Navigation back to statPage
+  observeEvent(input$back_to_stats, {
+    app_state$page <- "stat"
+  })
+  
+  # Export Pitcher Report
+  observeEvent(input$export_pitcher_report, {
+    req(selected_player$full_name, selected_player$player_id, selected_player$player_type, selected_player$jersey_number, selected_player$throwing_handedness)
+    
+    # Skeleton stats for PDF (same as modal)
+    stats <- list(
+      pitches_per_inning = "TBD",
+      first_pitch_strike_pct = "TBD",
+      era = "TBD",
+      whip = "TBD",
+      runs_per_9 = "TBD",
+      hits_per_9 = "TBD",
+      strikeouts_per_9 = "TBD",
+      walks_per_9 = "TBD",
+      br_per_9 = "TBD",
+      ba_against = "TBD",
+      obp_against = "TBD",
+      qabs_against = "TBD",
+      pitch_types = list(
+        FB = list(LHH = "TBD", Total = "TBD", RHH = "TBD"),
+        CB = list(LHH = "TBD", Total = "TBD", RHH = "TBD"),
+        CH = list(LHH = "TBD", Total = "TBD", RHH = "TBD")
+      ),
+      pitch_selection = list(
+        early = list("0-0" = "TBD", "1-0" = "TBD", "0-1" = "TBD", "1-1" = "TBD"),
+        behind = list("2-0" = "TBD", "2-1" = "TBD", "3-0" = "TBD", "3-1" = "TBD"),
+        ahead = list("0-2" = "TBD", "1-2" = "TBD", "2-2" = "TBD", "3-2" = "TBD")
+      )
+    )
+    
+    # Create temporary files
+    temp_rmd <- tempfile(fileext = ".Rmd")
+    temp_pdf <- tempfile(fileext = ".pdf")
+    
+    # R Markdown content mirroring pitcherReportUI
+    rmd_content <- c(
+      "---",
+      paste("title: 'Player Report: ", selected_player$full_name, "'"),
+      "output: pdf_document",
+      "geometry: margin=0.5in",
+      "header-includes:",
+      "  - \\usepackage{colortbl}",
+      "  - \\usepackage{booktabs}",
+      "  - \\usepackage{array}",
+      "  - \\usepackage{graphicx}",
+      "  - \\usepackage{float}",
+      "---",
+      "",
+      paste("```{r setup, include=FALSE}",
+            "if (!requireNamespace('ggplot2', quietly = TRUE)) install.packages('ggplot2')",
+            "library(ggplot2)",
+            "library(dplyr)",
+            "library(knitr)",
+            "options(warn = -1)",
+            # Define draw_baseball_field function
+            "draw_baseball_field <- function() {",
+            "  ggplot() +",
+            "    geom_rect(aes(xmin = 0, xmax = 500, ymin = 0, ymax = 500), fill = 'green', color = 'black') +",
+            "    geom_polygon(aes(x = c(250, 150, 250, 350), y = c(150, 250, 350, 250)), fill = 'tan') +",
+            "    geom_point(aes(x = 250, y = 250), size = 2) +  # Home plate",
+            "    geom_point(aes(x = 150, y = 250), size = 2) +  # First base",
+            "    geom_point(aes(x = 250, y = 350), size = 2) +  # Second base",
+            "    geom_point(aes(x = 350, y = 250), size = 2) +  # Third base",
+            "    geom_point(aes(x = 250, y = 100), size = 2) +  # Pitcher’s mound",
+            "    coord_fixed() +",
+            "    theme_minimal() +",
+            "    theme(axis.title = element_blank(), axis.text = element_blank(), axis.ticks = element_blank())",
+            "}",
+            "```"),
+      "",
+      "# Player Report: ", selected_player$full_name, "\n\n",
+      "\\noindent",
+      "\\begin{minipage}[t]{0.5\\textwidth}",
+      paste("\\textbf{", selected_player$full_name, "} \\\\"),
+      paste("Jersey \\# ", selected_player$jersey_number, " \\\\"),
+      paste("Hand: ", ifelse(selected_player$throwing_handedness %in% c("Left", "L"), "LHP", 
+                             ifelse(selected_player$throwing_handedness %in% c("Right", "R"), "RHP", "")), " \\\\"),
+      "\\end{minipage}",
+      "\\hfill",
+      "\\begin{minipage}[t]{0.5\\textwidth}",
+      "```{r spray_chart, echo=FALSE, fig.height=4, fig.width=4, fig.align='center', warning=FALSE, error=FALSE}",
+      "library(ggplot2)",
+      "p <- tryCatch(generate_spray_chart(", selected_player$player_id, ", role = 'pitcher', context = 'pdf'), error = function(e) {",
+      "  message('generate_spray_chart failed: ', e$message)",
+      "  draw_baseball_field() + geom_text(aes(x = 250, y = 250, label = 'Spray Chart Error'), size = 6) + theme_minimal()",
+      "})",
+      "print(p)",
+      "```",
+      "\\end{minipage}",
+      "\\vspace{0.5cm}",
+      "",
+      "## Pitch Type Distribution",
+      "\\noindent",
+      "\\begin{minipage}[t]{0.33\\textwidth}",
+      "\\textbf{FB} \\\\",
+      "Velocity: TBD \\\\",
+      "\\begin{tabular}{|c|c|c|}",
+      "\\hline",
+      "\\rowcolor[gray]{0.9}",
+      "\\textbf{LHH} & \\textbf{Total} & \\textbf{RHH} \\\\",
+      "\\hline",
+      paste0(stats$pitch_types$FB$LHH, "\\% & ", stats$pitch_types$FB$Total, "\\% & ", stats$pitch_types$FB$RHH, "\\% \\\\"),
+      "\\hline",
+      "\\end{tabular}",
+      "\\end{minipage}",
+      "\\hfill",
+      "\\begin{minipage}[t]{0.33\\textwidth}",
+      "\\textbf{CB} \\\\",
+      "Velocity: TBD \\\\",
+      "\\begin{tabular}{|c|c|c|}",
+      "\\hline",
+      "\\rowcolor[gray]{0.9}",
+      "\\textbf{LHH} & \\textbf{Total} & \\textbf{RHH} \\\\",
+      "\\hline",
+      paste0(stats$pitch_types$CB$LHH, "\\% & ", stats$pitch_types$CB$Total, "\\% & ", stats$pitch_types$CB$RHH, "\\% \\\\"),
+      "\\hline",
+      "\\end{tabular}",
+      "\\end{minipage}",
+      "\\hfill",
+      "\\begin{minipage}[t]{0.33\\textwidth}",
+      "\\textbf{CH} \\\\",
+      "Velocity: TBD \\\\",
+      "\\begin{tabular}{|c|c|c|}",
+      "\\hline",
+      "\\rowcolor[gray]{0.9}",
+      "\\textbf{LHH} & \\textbf{Total} & \\textbf{RHH} \\\\",
+      "\\hline",
+      paste0(stats$pitch_types$CH$LHH, "\\% & ", stats$pitch_types$CH$Total, "\\% & ", stats$pitch_types$CH$RHH, "\\% \\\\"),
+      "\\hline",
+      "\\end{tabular}",
+      "\\end{minipage}",
+      "\\vspace{0.5cm}",
+      "",
+      "## Additional Pitching Metrics",
+      "\\begin{tabular}{ll}",
+      "Strike \\% & ", stats$strike_pct, " \\\\",
+      "Called Strike \\% & ", stats$called_strike_pct, " \\\\",
+      "Swing \\& Miss \\% & ", stats$swing_miss_pct, " \\\\",
+      "\\% of Total Strikeouts & ", stats$pct_total_strikeouts, " \\\\",
+      "Chase Pitch Swing \\% & ", stats$chase_pitch_swing_pct, " \\\\",
+      "Hard Hit \\% & ", stats$hard_hit_pct, " \\\\",
+      "Weak Hit \\% & ", stats$weak_hit_pct, " \\\\",
+      "Ground Ball \\% & ", stats$ground_ball_pct, " \\\\",
+      "\\end{tabular}",
+      "\\vspace{0.5cm}",
+      "",
+      "## Pitching Statistics",
+      "\\begin{tabular}{|p{2cm}|p{2cm}|p{1.5cm}|p{1.5cm}|p{1.5cm}|p{1.5cm}|p{1.5cm}|p{2cm}|p{1.5cm}|p{1.5cm}|p{1.5cm}|p{1.5cm}|}",
+      "\\hline",
+      "\\rowcolor[gray]{0.9}",
+      "\\textbf{Pitches Per Inn} & \\textbf{First Pitch K\\%} & \\textbf{ERA} & \\textbf{WHIP} & \\textbf{Runs Per 9} & \\textbf{Hits Per 9} & \\textbf{Walks Per 9} & \\textbf{Strikeouts Per 9} & \\textbf{BR Per 9} & \\textbf{BA Against} & \\textbf{OBP Against} & \\textbf{QABs Against} \\\\",
+      "\\hline",
+      paste0(stats$pitches_per_inning, " & ", stats$first_pitch_strike_pct, "\\% & ", stats$era, " & ", stats$whip, " & ", stats$runs_per_9, " & ", stats$hits_per_9, " & ", stats$walks_per_9, " & ", stats$strikeouts_per_9, " & ", stats$br_per_9, " & ", stats$ba_against, " & ", stats$obp_against, " & ", stats$qabs_against, " \\\\"),
+      "\\hline",
+      "\\end{tabular}",
+      "\\vspace{0.5cm}",
+      "",
+      "## Pitch Selection",
+      "\\begin{tabular}{|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|p{1cm}|}",
+      "\\hline",
+      "\\rowcolor[gray]{0.9}",
+      "\\multicolumn{4}{|c|}{\\textbf{Early}} & \\multicolumn{4}{c|}{\\textbf{Behind}} & \\multicolumn{4}{c|}{\\textbf{Ahead}} \\\\",
+      "\\hline",
+      "\\rowcolor[gray]{0.9}",
+      "\\textbf{0-0} & \\textbf{1-0} & \\textbf{0-1} & \\textbf{1-1} & \\textbf{2-0} & \\textbf{2-1} & \\textbf{3-0} & \\textbf{3-1} & \\textbf{0-2} & \\textbf{1-2} & \\textbf{2-2} & \\textbf{3-2} \\\\",
+      "\\hline",
+      paste0(stats$pitch_selection$early$`0-0`, " & ", stats$pitch_selection$early$`1-0`, " & ", stats$pitch_selection$early$`0-1`, " & ", stats$pitch_selection$early$`1-1`, " & ", stats$pitch_selection$behind$`2-0`, " & ", stats$pitch_selection$behind$`2-1`, " & ", stats$pitch_selection$behind$`3-0`, " & ", stats$pitch_selection$behind$`3-1`, " & ", stats$pitch_selection$ahead$`0-2`, " & ", stats$pitch_selection$ahead$`1-2`, " & ", stats$pitch_selection$ahead$`2-2`, " & ", stats$pitch_selection$ahead$`3-2`, " \\\\"),
+      "\\hline",
+      "\\end{tabular}",
+      "\\vspace{0.5cm}",
+      "",
+      "## Summary",
+      "\\begin{tabular}{|p{2cm}|p{2cm}|}",
+      "\\hline",
+      "\\rowcolor[gray]{0.9}",
+      "\\textbf{Last 25} & \\textbf{All Time} \\\\",
+      "\\hline",
+      "TBD & TBD \\\\",
+      "\\hline",
+      "\\end{tabular}"
+    )
+    
+    # Write the Rmd file for debugging
+    writeLines(rmd_content, "debug.rmd")
+    
+    # Write and render the R Markdown file
+    writeLines(rmd_content, temp_rmd)
+    tryCatch({
+      rmarkdown::render(temp_rmd, output_file = temp_pdf, quiet = FALSE)  # Set quiet = FALSE for debugging
+    }, error = function(e) {
+      showNotification(paste("PDF export failed:", e$message), type = "error")
+      cat("Rendering error details:", e$message, file = "render_error.log")
+      return(NULL)
+    })
+    
+    # Serve the file for download only if rendering succeeds
+    if (file.exists(temp_pdf)) {
+      showModal(modalDialog(
+        title = "Export Successful",
+        p("Your request has been generated. Click below to download:"),
+        downloadButton("download_pitcher_pdf", "Download Pitcher PDF"),
+        footer = modalButton("Close")
+      ))
+      
+      output$download_pitcher_pdf <- downloadHandler(
+        filename = paste0("Pitcher_Report_", selected_player$full_name, ".pdf"),
+        content = function(file) {
+          file.copy(temp_pdf, file)
+        }
+      )
+    } else {
+      showNotification("PDF file was not created. Check render_error.log for details.", type = "error")
+    }
+  })
+  
+  ########## Reactive Databases ##########
+  # Reactive Player Database
+  stored_players <<- if (exists("stored_players", envir = .GlobalEnv)) {
+    get("stored_players", envir = .GlobalEnv)
+  } else {
+    data.frame(
+      PlayerID = numeric(),
+      TeamID = numeric(),
+      FirstName = character(),
+      LastName = character(),
+      FullName = character(),
+      JerseyNumber = numeric(),
+      PlayerType = character(),
+      GradYear = numeric(),
+      BatterHandedness = character(),
+      ThrowingHandedness = character(),
+      Status = character(),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  
+  # Reactive Values for Game State
+  game_state <- reactiveValues(
+    inning = 1,
+    half = "top",   # "top" or "bottom"
+    outs = 0,
+    balls = 0,
+    strikes = 0,
+    game_pitch_count = 0,
+    pitcher_pitch_count = 0,
+    ab_pitch_count = 0,
+    home_score = 0,   
+    away_score = 0,  
+    runners = list(first = FALSE, second = FALSE, third = FALSE),
+    home_batters = NULL,
+    away_batters = NULL, 
+    home_pitchers = NULL, 
+    away_pitchers = NULL,  
+    current_batter_idx = 1, 
+    home_next_batter_idx = 1, 
+    away_next_batter_idx = 1, 
+    current_pitcher = NULL  
+  )
+  
+  # Reactive Values for Pitch to Pitch Data
+  pitch_data <- reactiveValues(
+    pitches = data.frame(
+      Date = as.Date(character()),
+      EventType = character(),
+      EventID = numeric(),
+      HomeTeamID = numeric(),
+      AwayTeamID = numeric(),
+      HitterID = numeric(),
+      PitcherID = numeric(),
+      GamePitchNumber = numeric(),
+      PitchersPitchCount = numeric(),
+      AtBatPitchNumber = numeric(),
+      HalfInning = character(),
+      Inning = numeric(),
+      Outs = numeric(),
+      Strikes = numeric(),
+      Balls = numeric(),
+      PitchOutcome = character(),
+      PitchVelo = numeric(),
+      PitchType = character(),
+      PitchLocationx = numeric(),
+      PitchLocationy = numeric(),
+      BallInPlayOutcome = character(),
+      BatterScored = character(),
+      BallFlight = character(),
+      ContactType = character(),
+      SprayChartx = numeric(),
+      SprayCharty = numeric(),
+      stringsAsFactors = FALSE
+    )
+  )
+  
+  # Reactive Values for Lineup
+  # Home Team
+  home_lineup <- reactiveValues(
+    ht_1spot = NULL,
+    ht_2spot = NULL,
+    ht_3spot = NULL,
+    ht_4spot = NULL,
+    ht_5spot = NULL,
+    ht_6spot = NULL,
+    ht_7spot = NULL,
+    ht_8spot = NULL,
+    ht_9spot = NULL,
+  )
+  home_pitcher <- reactiveValues(
+    ht_Pspot = NULL,
+  )
+  # Away Team
+  away_lineup <- reactiveValues(
+    at_1spot = NULL,
+    at_2spot = NULL,
+    at_3spot = NULL,
+    at_4spot = NULL,
+    at_5spot = NULL,
+    at_6spot = NULL,
+    at_7spot = NULL,
+    at_8spot = NULL,
+    at_9spot = NULL,
+  )
+  away_pitcher <- reactiveValues(
+    at_Pspot = NULL,
+  )
+  
+  # reactiveValues object to store game-wide data (does not change pitch to pitch)
+  game_info <- reactiveValues(
+    Date = NULL,
+    EventType = NULL,
+    EventID = NULL,
+    HomeTeamID = NULL,
+    AwayTeamID = NULL
+  )
+  
+  # reactiveValues for Balls In Play
+  ball_in_play_data <- reactiveValues(
+    BallInPlayOutcome = NA,
+    BatterScored = NA,
+    BallFlight = NA,
+    ContactType = NA,
+    SprayChartx = NA,
+    SprayCharty = NA
+  )
+  
+  ########## New Event Page Functioning ##########
+  # Observe Event "Game" to set initial game values
+  observeEvent(input$type_game, {
+    game_info$Date <- current_date
+    game_info$EventType <- "Game"
+    
+    # Check if global_pitch_data exists and has EventID column
+    if (exists("global_pitch_data", envir = .GlobalEnv) && "EventID" %in% names(global_pitch_data)) {
+      if (nrow(global_pitch_data) > 0) {
+        game_info$EventID <- max(global_pitch_data$EventID, na.rm = TRUE) + 1
+      } else {
+        game_info$EventID <- 1
+      }
+    } else {
+      game_info$EventID <- 1
+    }
+    
+    # Reset Home Team Lineup to blank
+    home_lineup$ht_1spot <- NULL
+    home_lineup$ht_2spot <- NULL
+    home_lineup$ht_3spot <- NULL
+    home_lineup$ht_4spot <- NULL
+    home_lineup$ht_5spot <- NULL
+    home_lineup$ht_6spot <- NULL
+    home_lineup$ht_7spot <- NULL
+    home_lineup$ht_8spot <- NULL
+    home_lineup$ht_9spot <- NULL
+    home_pitcher$ht_Pspot <- NULL
+    
+    # Reset Away Team Lineup to blank
+    away_lineup$at_1spot <- NULL
+    away_lineup$at_2spot <- NULL
+    away_lineup$at_3spot <- NULL
+    away_lineup$at_4spot <- NULL
+    away_lineup$at_5spot <- NULL
+    away_lineup$at_6spot <- NULL
+    away_lineup$at_7spot <- NULL
+    away_lineup$at_8spot <- NULL
+    away_lineup$at_9spot <- NULL
+    away_pitcher$at_Pspot <- NULL
+    
+    ball_in_play_data_reset()
+    game_state_reset()
+    app_state$page <- "lineup"
+  })
+  
+  # Function to reset the game state - done in observeEvent above
+  game_state_reset <- function() {
+    game_state$inning <- 1
+    game_state$half <- "top"  # "top" or "bottom"
+    game_state$outs <- 0
+    game_state$balls <- 0
+    game_state$strikes <- 0
+    game_state$game_pitch_count <- 0
+    game_state$pitcher_pitch_count <- 0
+    game_state$ab_pitch_count <- 0
+    game_state$home_score <- 0
+    game_state$away_score <- 0
+    game_state$runners <- list(first = FALSE, second = FALSE, third = FALSE)
+  }
+  
+  # Function to reset the ball in play values
+  ball_in_play_data_reset <- function() {
+    ball_in_play_data$BallInPlayOutcome <- "none"
+    ball_in_play_data$BatterScored <- 0
+    ball_in_play_data$BallFlight <- "none"
+    ball_in_play_data$ContactType <- "none"
+    ball_in_play_data$SprayChartx <- NA
+    ball_in_play_data$SprayCharty <- NA
+  }
+  
+  ########## Lineup Setup Page Functioning ##########  
+  # On Lineup Page - Update Home lineups after a team is chosen
+  observeEvent(input$home_team, {
+    home_players <- stored_players %>%
+      filter(TeamID == division3teams$TeamID[division3teams$CollegeName == input$home_team],
+             Status == "Active") %>%
+      pull(FullName)
+    
+    player_choices <- if (length(home_players) > 0) home_players else character(0)
+    updateSelectInput(session, "ht_1spot", choices = player_choices, selected = if (length(player_choices) >= 1) player_choices[1] else NULL)
+    updateSelectInput(session, "ht_2spot", choices = player_choices, selected = if (length(player_choices) >= 2) player_choices[2] else NULL)
+    updateSelectInput(session, "ht_3spot", choices = player_choices, selected = if (length(player_choices) >= 3) player_choices[3] else NULL)
+    updateSelectInput(session, "ht_4spot", choices = player_choices, selected = if (length(player_choices) >= 4) player_choices[4] else NULL)
+    updateSelectInput(session, "ht_5spot", choices = player_choices, selected = if (length(player_choices) >= 5) player_choices[5] else NULL)
+    updateSelectInput(session, "ht_6spot", choices = player_choices, selected = if (length(player_choices) >= 6) player_choices[6] else NULL)
+    updateSelectInput(session, "ht_7spot", choices = player_choices, selected = if (length(player_choices) >= 7) player_choices[7] else NULL)
+    updateSelectInput(session, "ht_8spot", choices = player_choices, selected = if (length(player_choices) >= 8) player_choices[8] else NULL)
+    updateSelectInput(session, "ht_9spot", choices = player_choices, selected = if (length(player_choices) >= 9) player_choices[9] else NULL)
+    updateSelectInput(session, "ht_starting_pitcher", choices = player_choices, selected = if (length(player_choices) >= 10) player_choices[10] else NULL)
+  })
+  
+  # On Lineup Page - Update Away lineups after a team is chosen
+  observeEvent(input$away_team, {
+    away_players <- stored_players %>%
+      filter(TeamID == division3teams$TeamID[division3teams$CollegeName == input$away_team],
+             Status == "Active") %>%
+      pull(FullName)
+    
+    player_choices <- if (length(away_players) > 0) away_players else character(0)
+    updateSelectInput(session, "at_1spot", choices = player_choices, selected = if (length(player_choices) >= 1) player_choices[1] else NULL)
+    updateSelectInput(session, "at_2spot", choices = player_choices, selected = if (length(player_choices) >= 2) player_choices[2] else NULL)
+    updateSelectInput(session, "at_3spot", choices = player_choices, selected = if (length(player_choices) >= 3) player_choices[3] else NULL)
+    updateSelectInput(session, "at_4spot", choices = player_choices, selected = if (length(player_choices) >= 4) player_choices[4] else NULL)
+    updateSelectInput(session, "at_5spot", choices = player_choices, selected = if (length(player_choices) >= 5) player_choices[5] else NULL)
+    updateSelectInput(session, "at_6spot", choices = player_choices, selected = if (length(player_choices) >= 6) player_choices[6] else NULL)
+    updateSelectInput(session, "at_7spot", choices = player_choices, selected = if (length(player_choices) >= 7) player_choices[7] else NULL)
+    updateSelectInput(session, "at_8spot", choices = player_choices, selected = if (length(player_choices) >= 8) player_choices[8] else NULL)
+    updateSelectInput(session, "at_9spot", choices = player_choices, selected = if (length(player_choices) >= 9) player_choices[9] else NULL)
+    updateSelectInput(session, "at_starting_pitcher", choices = player_choices, selected = if (length(player_choices) >= 10) player_choices[10] else NULL)
+  })
+  
+  observeEvent(input$to_game, {
+    game_info$HomeTeamID <- division3teams$TeamID[division3teams$CollegeName == input$home_team]
+    game_info$AwayTeamID <- division3teams$TeamID[division3teams$CollegeName == input$away_team]
+    
+    home_lineup$ht_1spot <- input$ht_1spot
+    home_lineup$ht_2spot <- input$ht_2spot
+    home_lineup$ht_3spot <- input$ht_3spot
+    home_lineup$ht_4spot <- input$ht_4spot
+    home_lineup$ht_5spot <- input$ht_5spot
+    home_lineup$ht_6spot <- input$ht_6spot
+    home_lineup$ht_7spot <- input$ht_7spot
+    home_lineup$ht_8spot <- input$ht_8spot
+    home_lineup$ht_9spot <- input$ht_9spot
+    home_pitcher$ht_Pspot <- input$ht_starting_pitcher
+    
+    away_lineup$at_1spot <- input$at_1spot
+    away_lineup$at_2spot <- input$at_2spot
+    away_lineup$at_3spot <- input$at_3spot
+    away_lineup$at_4spot <- input$at_4spot
+    away_lineup$at_5spot <- input$at_5spot
+    away_lineup$at_6spot <- input$at_6spot
+    away_lineup$at_7spot <- input$at_7spot
+    away_lineup$at_8spot <- input$at_8spot
+    away_lineup$at_9spot <- input$at_9spot
+    away_pitcher$at_Pspot <- input$at_starting_pitcher
+    
+    home_lineup_duplicated <- reactiveValuesToList(home_lineup)
+    away_lineup_duplicated <- reactiveValuesToList(away_lineup)
+    
+    home_duplicates <- any(duplicated(home_lineup_duplicated[!is.null(home_lineup_duplicated)]))
+    away_duplicates <- any(duplicated(away_lineup_duplicated[!is.null(away_lineup_duplicated)]))
+    
+    if (home_duplicates || away_duplicates) {
+      showNotification("Cannot proceed: Duplicate players in lineup(s)!", type = "error")
+      return()
+    }
+    
+    game_state$home_batters <- reactiveValuesToList(home_lineup)
+    game_state$home_pitchers <- stored_players %>% 
+      filter(TeamID == division3teams$TeamID[division3teams$CollegeName == input$home_team],
+             Status == "Active") %>% 
+      pull(FullName)
+    game_state$current_pitcher <- input$ht_starting_pitcher
+    
+    game_state$away_batters <- reactiveValuesToList(away_lineup)
+    game_state$away_pitchers <- stored_players %>% 
+      filter(TeamID == division3teams$TeamID[division3teams$CollegeName == input$away_team],
+             Status == "Active") %>% 
+      pull(FullName)
+    
+    game_state$current_batter_idx <- game_state$away_next_batter_idx
+    updateSelectInput(session, "current_pitcher", choices = game_state$home_pitchers, selected = game_state$current_pitcher)
+    updateSelectInput(session, "current_hitter", choices = stored_players %>% 
+                        filter(TeamID == game_info$AwayTeamID, Status == "Active") %>% 
+                        pull(FullName), 
+                      selected = game_state$away_batters[game_state$current_batter_idx])
+    app_state$page <- "game_event"
+  })
+  
+  # Move these outside the to_game observer
+  observeEvent(input$current_hitter, {
+    current_batters <- if (game_state$half == "top") game_state$away_batters else game_state$home_batters
+    if (!is.null(input$current_hitter) && input$current_hitter != current_batters[game_state$current_batter_idx]) {
+      if (game_state$half == "top") {
+        game_state$away_batters[game_state$current_batter_idx] <- input$current_hitter
+      } else {
+        game_state$home_batters[game_state$current_batter_idx] <- input$current_hitter
+      }
+    }
+  })
+  
+  observeEvent(input$current_pitcher, {
+    game_state$current_pitcher <- input$current_pitcher
+  })
+  
+  ########## Game Input Functioning ##########
+  
+  # Function to record new pitch
+  record_pitch <- function(outcome, extra = list()) {
+    req(input$pitch_speed, input$pitch_type)
+    
+    # Only validate pitch location for outcomes needing it
+    if (outcome %in% c("Called Strike", "Swinging Strike", "Foul Ball", "Ball", "Hit By Pitch", "Ball In Play")) {
+      validate(need(nrow(pitches$location) > 0, "Please click on the strike zone first"))
+    }
+    
+    # Use NA for pitch location if not applicable
+    pitch_x <- if (nrow(pitches$location) > 0) pitches$location$xlocation else NA
+    pitch_y <- if (nrow(pitches$location) > 0) pitches$location$ylocation else NA
+    
+    game_state$game_pitch_count <- game_state$game_pitch_count + 1
+    batters <- if (game_state$half == "top") game_state$away_batters else game_state$home_batters
+    
+    new_pitch <- data.frame(
+      Date = as.Date(game_info$Date, format = "%m/%d/%Y"),  # Convert to Date type
+      EventType = game_info$EventType,
+      EventID = game_info$EventID,
+      HomeTeamID = game_info$HomeTeamID,
+      AwayTeamID = game_info$AwayTeamID,
+      HitterID = stored_players %>% filter(FullName == batters[game_state$current_batter_idx]) %>% pull(PlayerID) %>% first(),
+      PitcherID = stored_players %>% filter(FullName == game_state$current_pitcher) %>% pull(PlayerID) %>% first(),
+      GamePitchNumber = game_state$game_pitch_count,
+      PitchersPitchCount = NA,
+      AtBatPitchNumber = NA,
+      Half = game_state$half,
+      Inning = game_state$inning,
+      Outs = game_state$outs,
+      Strikes = game_state$strikes,
+      Balls = game_state$balls,
+      PitchOutcome = outcome,
+      PitchVelo = input$pitch_speed,
+      PitchType = input$pitch_type,
+      PitchLocationx = pitch_x,
+      PitchLocationy = pitch_y,
+      BallInPlayOutcome = ball_in_play_data$BallInPlayOutcome,
+      BatterScored = ball_in_play_data$BatterScored,
+      BallFlight = ball_in_play_data$BallFlight,
+      ContactType = ball_in_play_data$ContactType,
+      SprayChartx = ball_in_play_data$SprayChartx,
+      SprayCharty = ball_in_play_data$SprayCharty,
+      stringsAsFactors = FALSE
+    )
+    
+    if (length(extra) > 0) {
+      for (nm in names(extra)) {
+        new_pitch[[nm]] <- extra[[nm]]
+      }
+    }
+    
+    pitch_data$pitches <- rbind(pitch_data$pitches, new_pitch)
+  }
+  
+  # Reset pitch input fields
+  resetPitchInputs <- function() {
+    updateSliderInput(session, "pitch_speed", value = 0)
+    updateRadioButtons(session, "pitch_type", selected = character(0))
+    # Clear the pitch location so no point is shown on the graph
+    pitches$location <- data.frame(xlocation = numeric(), ylocation = numeric())
+  }
+  
+  # Changing Batters and Pitchers, Switching After Half Innings
+  update_batter_and_pitcher <- function() {
+    current_batters <- if (game_state$half == "top") game_state$away_batters else game_state$home_batters
+    current_pitchers <- if (game_state$half == "top") game_state$home_pitchers else game_state$away_pitchers
+    hitter_choices <- if (game_state$half == "top") {
+      stored_players %>% 
+        filter(TeamID == game_info$AwayTeamID, Status == "Active") %>% 
+        pull(FullName)
+    } else {
+      stored_players %>% 
+        filter(TeamID == game_info$HomeTeamID, Status == "Active") %>% 
+        pull(FullName)
+    }
+    updateSelectInput(session, "current_hitter", choices = hitter_choices, selected = current_batters[game_state$current_batter_idx])
+    updateSelectInput(session, "current_pitcher", choices = current_pitchers, selected = game_state$current_pitcher)
+  }
+  
+  # Update count & game state helper function
+  update_count_and_inning <- function(is_strike = FALSE, is_ball = FALSE, is_foul = FALSE, reset = FALSE) {
+    if (reset) {
+      game_state$balls <- 0
+      game_state$strikes <- 0
+    } else {
+      if (is_foul) {
+        if (game_state$strikes < 2) game_state$strikes <- game_state$strikes + 1
+      } else {
+        if (is_strike) game_state$strikes <- game_state$strikes + 1
+        if (is_ball) game_state$balls <- game_state$balls + 1
+      }
+    }
+    
+    if (game_state$strikes >= 3 || game_state$balls >= 4) {
+      if (game_state$strikes >= 3) game_state$outs <- game_state$outs + 1
+      else if (game_state$balls >= 4) {
+        if (!game_state$runners$first) game_state$runners$first <- TRUE
+        else if (!game_state$runners$second) { game_state$runners$second <- TRUE; game_state$runners$first <- TRUE }
+        else if (!game_state$runners$third) { game_state$runners$third <- TRUE; game_state$runners$second <- TRUE; game_state$runners$first <- TRUE }
+        else { if (game_state$half == "top") game_state$away_score <- game_state$away_score + 1 else game_state$home_score <- game_state$home_score + 1; game_state$runners$third <- TRUE; game_state$runners$second <- TRUE; game_state$runners$first <- TRUE }
+      }
+      game_state$current_batter_idx <- game_state$current_batter_idx + 1
+      if (game_state$current_batter_idx > 9) game_state$current_batter_idx <- 1
+      update_batter_and_pitcher()
+      update_count_and_inning(reset = TRUE)
+    }
+    
+    if (game_state$outs >= 3) {
+      confirm_previous_inning()
+      
+      if (game_state$half == "top") {
+        game_state$away_next_batter_idx <- game_state$current_batter_idx
+        game_state$half <- "bottom"
+        game_state$current_batter_idx <- game_state$home_next_batter_idx
+        if (is.null(game_state$current_pitcher)) game_state$current_pitcher <- game_state$away_pitchers[1]
+      } else {
+        game_state$home_next_batter_idx <- game_state$current_batter_idx
+        game_state$half <- "top"
+        game_state$inning <- game_state$inning + 1
+        game_state$current_batter_idx <- game_state$away_next_batter_idx
+        if (is.null(game_state$current_pitcher)) game_state$current_pitcher <- game_state$home_pitchers[1]
+      }
+      game_state$outs <- 0
+      game_state$runners$first <- FALSE
+      game_state$runners$second <- FALSE
+      game_state$runners$third <- FALSE
+      update_batter_and_pitcher()
+      
+      if (game_state$inning >= 9) {
+        if (game_state$half == "bottom" && game_state$home_score > game_state$away_score) {
+          showModal(modalDialog(
+            title = "End Game",
+            paste("Home Team Wins:", game_state$home_score, "-", game_state$away_score),
+            footer = actionButton("end_game_confirm", "OK"),
+            easyClose = TRUE
+          ))
+        } else if (game_state$half == "bottom" && game_state$home_score != game_state$away_score) {
+          winner <- if (game_state$home_score > game_state$away_score) "Home Team" else "Away Team"
+          showModal(modalDialog(
+            title = "End Game",
+            paste(winner, "Wins:", max(game_state$home_score, game_state$away_score), "-", min(game_state$home_score, game_state$away_score)),
+            footer = actionButton("end_game_confirm", "OK"),
+            easyClose = TRUE
+          ))
+        }
+      }
+    }
+  }
+  
+  # When it recognized three outs, this will pop up
+  confirm_previous_inning <- function() {
+    showModal(modalDialog(
+      title = "End of Half Inning",
+      "Do you want to save the pitches to the database?",
+      footer = tagList(
+        actionButton("see_pitches", "Edit Pitch Log"),
+        actionButton("save_half_inning", "Save Pitches")
+      ),
+      easyClose = FALSE
+    ))
+  }
+  
+  # See only the pitches
+  observeEvent(input$see_pitches, {
+    app_state$page <- "see_pitches"
+    removeModal()
+  })
+  
+  # Back to Game Page
+  observeEvent(input$back_to_game, {
+    app_state$page <- "game_event"
+    if (exists("global_pitch_data", envir = .GlobalEnv)) {
+      # Retrieve existing data and append new data
+      old_pitch_data <- get("global_pitch_data", envir = .GlobalEnv)
+      global_pitch_data <<- bind_rows(old_pitch_data, pitch_data$pitches)
+    } else {
+      # Create new global pitch data
+      global_pitch_data <<- pitch_data$pitches
+    }
+    
+    showNotification("Pitch data has been added!", type = "message")
+    
+    # Clear the current half inning pitches
+    pitch_data$pitches  = data.frame(
+      Date = as.Date(character()),
+      EventType = character(),
+      EventID = numeric(),
+      HomeTeamID = numeric(),
+      AwayTeamID = numeric(),
+      HitterID = numeric(),
+      PitcherID = numeric(),
+      GamePitchNumber = numeric(),
+      PitchersPitchCount = numeric(),
+      AtBatPitchNumber = numeric(),
+      HalfInning = character(),
+      Inning = numeric(),
+      Outs = numeric(),
+      Strikes = numeric(),
+      Balls = numeric(),
+      PitchOutcome = character(),
+      PitchVelo = numeric(),
+      PitchType = character(),
+      PitchLocationx = numeric(),
+      PitchLocationy = numeric(),
+      BallInPlayOutcome = character(),
+      BatterScored = character(),
+      BallFlight = character(),
+      ContactType = character(),
+      SprayChartx = numeric(),
+      SprayCharty = numeric(),
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  # Save pitches for half inning
+  observeEvent(input$save_half_inning, {
+    if (exists("global_pitch_data", envir = .GlobalEnv)) {
+      # Retrieve existing data and append new data
+      old_pitch_data <- get("global_pitch_data", envir = .GlobalEnv)
+      global_pitch_data <<- bind_rows(old_pitch_data, pitch_data$pitches)
+    } else {
+      # Create new global pitch data
+      global_pitch_data <<- pitch_data$pitches
+    }
+    
+    showNotification("Pitch data has been added!", type = "message")
+    removeModal()
+    
+    # Clear the current half inning pitches
+    pitch_data$pitches  = data.frame(
+      Date = as.Date(character()),
+      EventType = character(),
+      EventID = numeric(),
+      HomeTeamID = numeric(),
+      AwayTeamID = numeric(),
+      HitterID = numeric(),
+      PitcherID = numeric(),
+      GamePitchNumber = numeric(),
+      PitchersPitchCount = numeric(),
+      AtBatPitchNumber = numeric(),
+      HalfInning = character(),
+      Inning = numeric(),
+      Outs = numeric(),
+      Strikes = numeric(),
+      Balls = numeric(),
+      PitchOutcome = character(),
+      PitchVelo = numeric(),
+      PitchType = character(),
+      PitchLocationx = numeric(),
+      PitchLocationy = numeric(),
+      BallInPlayOutcome = character(),
+      BatterScored = character(),
+      BallFlight = character(),
+      ContactType = character(),
+      SprayChartx = numeric(),
+      SprayCharty = numeric(),
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  # Current Pitches List Output
+  output$short_term_table <- renderDT({
+    datatable(pitch_data$pitches)
+  })
+  
+  #Process save to database and pitch data is written into tibble
+  observeEvent(input$commit_pitches, {
+    if (exists("global_pitch_data", envir = .GlobalEnv)) {
+      # Retrieve existing data and append new data
+      old_pitch_data <- get("global_pitch_data", envir = .GlobalEnv)
+      updated_pitch_data <- bind_rows(old_pitch_data, pitch_data$pitches)
+      assign("global_pitch_data", updated_pitch_data, envir = .GlobalEnv)
+    } else {
+      # Create new global pitch data
+      assign("global_pitch_data", pitch_data$pitches, envir = .GlobalEnv)
+    }
+    
+    showNotification("Pitch data has been appended to the global variable!", type = "message")
+  })
+  
+  # Output Tables for different lineups
+  output$home_team_table <- renderTable({
+    data.frame(
+      Order = c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "Pitcher"),
+      Player = c(
+        home_lineup$ht_1spot,
+        home_lineup$ht_2spot,
+        home_lineup$ht_3spot,
+        home_lineup$ht_4spot,
+        home_lineup$ht_5spot,
+        home_lineup$ht_6spot,
+        home_lineup$ht_7spot,
+        home_lineup$ht_8spot,
+        home_lineup$ht_9spot,
+        home_pitcher$ht_Pspot
+      )
+    )
+  })
+  output$away_team_table <- renderTable({
+    data.frame(
+      Order = c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "Pitcher"),
+      Player = c(
+        away_lineup$at_1spot,
+        away_lineup$at_2spot,
+        away_lineup$at_3spot,
+        away_lineup$at_4spot,
+        away_lineup$at_5spot,
+        away_lineup$at_6spot,
+        away_lineup$at_7spot,
+        away_lineup$at_8spot,
+        away_lineup$at_9spot,
+        away_pitcher$at_Pspot
+      )
+    )
+  })
+  
+  ########## Different Pitch Outcome Button - ObserverEvent's ##########
+  # Called Strike
+  observeEvent(input$called_strike, {
+    req(input$pitch_speed, input$pitch_type)
+    validate(need(nrow(pitches$location) > 0, "Please click on the strike zone first"))
+    
+    ball_in_play_data_reset()
+    record_pitch("Called Strike")
+    update_count_and_inning(is_strike = TRUE)
+    resetPitchInputs()
+  })
+  
+  # Swinging Strike
+  observeEvent(input$swing_strike, {
+    req(input$pitch_speed, input$pitch_type)
+    validate(need(nrow(pitches$location) > 0, "Please click on the strike zone first"))
+    
+    ball_in_play_data_reset()
+    record_pitch("Swinging Strike")
+    update_count_and_inning(is_strike = TRUE)
+    resetPitchInputs()
+  })
+  
+  # Foul Ball
+  observeEvent(input$foul_ball, {
+    req(input$pitch_speed, input$pitch_type)
+    validate(
+      need(nrow(pitches$location) > 0, "Please click on the strike zone first")
+    )
+    
+    ball_in_play_data_reset()
+    record_pitch("Foul Ball")
+    update_count_and_inning(is_foul = TRUE)
+    resetPitchInputs()
+  })
+  
+  # Ball
+  observeEvent(input$ball, {
+    req(input$pitch_speed, input$pitch_type)
+    validate(need(nrow(pitches$location) > 0, "Please click on the strike zone first"))
+    
+    ball_in_play_data_reset()
+    record_pitch("Ball")
+    update_count_and_inning(is_ball = TRUE)
+    resetPitchInputs()
+  })
+  
+  # Hit By Pitch
+  observeEvent(input$hit_by_pitch, {
+    req(input$pitch_speed, input$pitch_type)
+    validate(need(nrow(pitches$location) > 0, "Please click on the strike zone first"))
+    
+    ball_in_play_data_reset()
+    record_pitch("Hit By Pitch")
+    
+    if (!game_state$runners$first) game_state$runners$first <- TRUE
+    else if (!game_state$runners$second) { game_state$runners$second <- TRUE; game_state$runners$first <- TRUE }
+    else if (!game_state$runners$third) { game_state$runners$third <- TRUE; game_state$runners$second <- TRUE; game_state$runners$first <- TRUE }
+    else { if (game_state$half == "top") game_state$away_score <- game_state$away_score + 1 else game_state$home_score <- game_state$home_score + 1; game_state$runners$third <- TRUE; game_state$runners$second <- TRUE; game_state$runners$first <- TRUE }
+    
+    game_state$current_batter_idx <- game_state$current_batter_idx + 1
+    if (game_state$current_batter_idx > 9) game_state$current_batter_idx <- 1
+    update_batter_and_pitcher()
+    update_count_and_inning(reset = TRUE)
+    resetPitchInputs()
+  })
+  
+  ########## Ball In Play Button with Functioning ##########
+  # Ball In Play 
+  observeEvent(input$ball_in_play, {
+    req(input$pitch_speed, input$pitch_type)
+    validate(need(nrow(pitches$location) > 0, "Please click on the strike zone first"))
+    
+    # Count runners on base
+    runners_on <- sum(game_state$runners$first, game_state$runners$second, game_state$runners$third)
+    
+    # Base outcomes
+    available_outcomes <- c("Out", "Single", "Double", "Triple", "Homerun", "Error")
+    if (runners_on >= 1 && game_state$outs < 2) {
+      available_outcomes <- c(available_outcomes, "Double Play", "Sacrifice Fly")
+    }
+    if (runners_on >= 2 && game_state$outs < 1) {
+      available_outcomes <- c(available_outcomes, "Triple Play")
+    }
+    
+    # Dynamic UI for runner advancement (only if runners exist)
+    runner_ui <- if (runners_on > 0) {
+      tagList(
+        if (game_state$runners$first) {
+          selectInput("first_advance", "First Base Runner Advances To:",
+                      choices = c("Stay on First", "Second", "Third", "Home"))
+        },
+        if (game_state$runners$second) {
+          selectInput("second_advance", "Second Base Runner Advances To:",
+                      choices = c("Stay on Second", "Third", "Home"))
+        },
+        if (game_state$runners$third) {
+          selectInput("third_advance", "Third Base Runner Advances To:",
+                      choices = c("Stay on Third", "Home"))
+        }
+      )
+    } else {
+      NULL
+    }
+    
+    # Show modal dialog with dynamic outcomes and runner options
+    showModal(modalDialog(
+      title = "Ball In Play Details",
+      plotOutput("hit_field", click = "hit_field_click", height = "600px", width = "600px"),
+      selectInput("ball_flight", "Ball Flight", choices = ball_flight_types),
+      selectInput("contact_quality", "Contact Quality", choices = contact_quality_types),
+      selectInput("hit_outcome", "Outcome", choices = available_outcomes),
+      uiOutput("runner_ui_output"),  # Use uiOutput for dynamic updates
+      actionButton("confirm_hit", "Confirm"),
+      actionButton("cancel_hit", "Cancel", class = "btn btn-default"),
+      footer = NULL,
+      easyClose = TRUE,
+      size = "l"
+    ))
+    
+    # Clear previous hit location
+    hit_location$coords <- data.frame(x = numeric(), y = numeric())
+    
+  })
+  
+  # Cancel Hit
+  observeEvent(input$cancel_hit, {
+    removeModal()
+  })
+  
+  # Observe hit
+  observeEvent(input$hit_field_click, {
+    hit_location$coords <- data.frame(x = input$hit_field_click$x, 
+                                      y = input$hit_field_click$y)
+  })
+  
+  # Confirm Observe Hit
+  observeEvent(input$confirm_hit, {
+    removeModal()
+    req(nrow(hit_location$coords) > 0, input$ball_flight, input$contact_quality, input$hit_outcome)
+    
+    last_pitch_idx <- nrow(pitch_data$pitches)
+    ball_in_play_data$BallInPlayOutcome <- input$hit_outcome
+    ball_in_play_data$BatterScored <- ifelse(input$hit_outcome == "Homerun", 1, 0)
+    ball_in_play_data$BallFlight <- input$ball_flight
+    ball_in_play_data$ContactType <- input$contact_quality
+    ball_in_play_data$SprayChartx <- hit_location$coords$x
+    ball_in_play_data$SprayCharty <- hit_location$coords$y
+    
+    # Record the pitch initially
+    record_pitch("Ball In Play")
+    
+    # Reset previous pitch
+    resetPitchInputs()
+    
+    game_state$balls <- 0
+    game_state$strikes <- 0
+    batting_team_score <- ifelse(game_state$half == "top", "away_score", "home_score")
+    new_runners <- list(first = FALSE, second = FALSE, third = FALSE)
+    outcome <- input$hit_outcome
+    
+    if (outcome != "Homerun") {
+      if (game_state$runners$first && !is.null(input$first_advance)) {
+        if (input$first_advance == "Second") new_runners$second <- TRUE
+        else if (input$first_advance == "Third") new_runners$third <- TRUE
+        else if (input$first_advance == "Home") game_state[[batting_team_score]] <- game_state[[batting_team_score]] + 1
+        else new_runners$first <- TRUE
+      }
+      if (game_state$runners$second && !is.null(input$second_advance)) {
+        if (input$second_advance == "Third") new_runners$third <- TRUE
+        else if (input$second_advance == "Home") game_state[[batting_team_score]] <- game_state[[batting_team_score]] + 1
+        else new_runners$second <- TRUE
+      }
+      if (game_state$runners$third && !is.null(input$third_advance)) {
+        if (input$third_advance == "Home") game_state[[batting_team_score]] <- game_state[[batting_team_score]] + 1
+        else new_runners$third <- TRUE
+      }
+    }
+    
+    if (outcome == "Out") {
+      game_state$outs <- game_state$outs + 1
+      game_state$runners$first <- new_runners$first
+      game_state$runners$second <- new_runners$second
+      game_state$runners$third <- new_runners$third
+    } else if (outcome == "Double Play") {
+      game_state$outs <- min(game_state$outs + 2, 3)
+      game_state$runners$first <- FALSE
+      game_state$runners$second <- FALSE
+      game_state$runners$third <- FALSE
+    } else if (outcome == "Triple Play") {
+      game_state$outs <- 3
+      game_state$runners$first <- FALSE
+      game_state$runners$second <- FALSE
+      game_state$runners$third <- FALSE
+    } else if (outcome == "Single") {
+      game_state$runners$first <- new_runners$first || TRUE
+      game_state$runners$second <- new_runners$second
+      game_state$runners$third <- new_runners$third
+    } else if (outcome == "Double") {
+      game_state$runners$first <- new_runners$first
+      game_state$runners$second <- new_runners$second || TRUE
+      game_state$runners$third <- new_runners$third
+    } else if (outcome == "Triple") {
+      game_state$runners$first <- new_runners$first
+      game_state$runners$second <- new_runners$second
+      game_state$runners$third <- new_runners$third || TRUE
+    } else if (outcome == "Homerun") {
+      runs_scored <- 1 + sum(game_state$runners$first, game_state$runners$second, game_state$runners$third)
+      game_state[[batting_team_score]] <- game_state[[batting_team_score]] + runs_scored
+      game_state$runners$first <- FALSE
+      game_state$runners$second <- FALSE
+      game_state$runners$third <- FALSE
+    } else if (outcome == "Error") {
+      game_state$runners$first <- new_runners$first || TRUE
+      game_state$runners$second <- new_runners$second
+      game_state$runners$third <- new_runners$third
+    } else if (outcome == "Sacrifice Fly") {
+      game_state$outs <- game_state$outs + 1
+      game_state$runners$first <- new_runners$first
+      game_state$runners$second <- new_runners$second
+      game_state$runners$third <- new_runners$third
+    }
+    
+    game_state$current_batter_idx <- game_state$current_batter_idx + 1
+    if (game_state$current_batter_idx > 9) game_state$current_batter_idx <- 1
+    update_batter_and_pitcher()
+    
+    if (game_state$outs >= 3) {
+      confirm_previous_inning()
+      
+      game_state$outs <- 0
+      if (game_state$half == "top") {
+        game_state$away_next_batter_idx <- game_state$current_batter_idx
+        game_state$half <- "bottom"
+        game_state$current_batter_idx <- game_state$home_next_batter_idx
+        if (is.null(game_state$current_pitcher)) game_state$current_pitcher <- game_state$away_pitchers[1]
+      } else {
+        game_state$home_next_batter_idx <- game_state$current_batter_idx
+        game_state$half <- "top"
+        game_state$inning <- game_state$inning + 1
+        game_state$current_batter_idx <- game_state$away_next_batter_idx
+        if (is.null(game_state$current_pitcher)) game_state$current_pitcher <- game_state$home_pitchers[1]
+      }
+      game_state$runners$first <- FALSE
+      game_state$runners$second <- FALSE
+      game_state$runners$third <- FALSE
+      update_batter_and_pitcher()
+      ball_in_play_data_reset()
+    }
+  })
+  
+  # Ball in Play plot
+  output$hit_field <- renderPlot({
+    p2 <- draw_baseball_field()
+    
+    if (nrow(hit_location$coords) > 0) {
+      # Default to gray circle if inputs are NULL
+      flight_color <- switch(input$ball_flight %||% "default",
+                             "Fly Ball" = "blue",
+                             "Ground Ball" = "green",
+                             "Line Drive" = "orange",
+                             "Pop-Up" = "purple",
+                             "default" = "gray")
+      contact_shape <- switch(input$contact_quality %||% "default",
+                              "Weak" = 16,  # Circle (updated from "Soft Contact")
+                              "Average" = 17,  # Triangle
+                              "Hard" = 15,  # Square
+                              "default" = 16)  # Default circle
+      
+      p2 <- p2 + geom_point(data = hit_location$coords, 
+                            aes(x = x, y = y), 
+                            color = flight_color, 
+                            shape = contact_shape, 
+                            size = 5)
+    }
+    
+    p2
+  }
+  )
+  
+  
+  ########## Runners Advances Button with Functioning ##########
+  # Runners Advance
+  observeEvent(input$runners_advance, {
+    showModal(modalDialog(
+      title = "Runners Advance",
+      plotOutput("runner_field", click = "runner_field_click", height = "600px", width = "600px"),
+      uiOutput("runner_options"),  
+      footer = tagList(
+        actionButton("cancel_runners", "Cancel", class = "btn btn-default"),
+      ),
+      size = "l"
+    ))
+    
+    runner_selection$base <- NULL
+  })
+  
+  # Observe pressing base to advance runner
+  observeEvent(input$runner_field_click, {
+    print(paste("Click at:", input$runner_field_click$x, input$runner_field_click$y))
+    
+    # Map click coordinates to nearest base
+    bases <- data.frame(
+      base = c("First", "Second", "Third"),
+      x = c(120, 120, 0),
+      y = c(0, 120, 120),
+      occupied = c(game_state$runners$first, game_state$runners$second, game_state$runners$third)
+    )
+    
+    occupied_bases <- bases[bases$occupied, ]
+    if (nrow(occupied_bases) > 0) {
+      distances <- sqrt((occupied_bases$x - input$runner_field_click$x)^2 + 
+                          (occupied_bases$y - input$runner_field_click$y)^2)
+      nearest_base <- occupied_bases$base[which.min(distances)]
+      print(paste("Nearest occupied base:", nearest_base, "Distance:", min(distances)))
+      runner_selection$base <- nearest_base
+    } else {
+      print("No occupied bases to select.")
+    }
+  })  
+  
+  # Confirm Advance Observe
+  observeEvent(input$confirm_advance, {
+    req(runner_selection$base, input$advance_reason)
+    
+    # Move runner based on current base
+    if (runner_selection$base == "First") {
+      game_state$runners$second <- TRUE
+      game_state$runners$first <- FALSE
+    } else if (runner_selection$base == "Second") {
+      game_state$runners$third <- TRUE
+      game_state$runners$second <- FALSE
+    } else if (runner_selection$base == "Third") {
+      if (game_state$half == "top") {
+        game_state$away_score <- game_state$away_score + 1
+      } else {
+        game_state$home_score <- game_state$home_score + 1
+      }
+      game_state$runners$third <- FALSE
+    }
+    
+    # Log the event (optional, could expand pitch_data for this)
+    print(paste("Runner from", runner_selection$base, "advanced via", input$advance_reason))
+    
+    removeModal()
+  })
+  
+  # Cancel Advance Runner Pop-Up
+  observeEvent(input$cancel_runners, {
+    removeModal()  
+  })
+  
+  # Confirm Out for Runners
+  observeEvent(input$confirm_out, {
+    req(runner_selection$base)
+    
+    # Remove runner and increment outs
+    if (runner_selection$base == "First") {
+      game_state$runners$first <- FALSE
+    } else if (runner_selection$base == "Second") {
+      game_state$runners$second <- FALSE
+    } else if (runner_selection$base == "Third") {
+      game_state$runners$third <- FALSE
+    }
+    game_state$outs <- game_state$outs + 1
+    
+    # Check for inning end
+    if (game_state$outs >= 3) {
+      game_state$outs <- 0
+      game_state$half <- ifelse(game_state$half == "top", "bottom", "top")
+      if (game_state$half == "top") game_state$inning <- game_state$inning + 1
+      game_state$runners$first <- FALSE
+      game_state$runners$second <- FALSE
+      game_state$runners$third <- FALSE
+    }
+    
+    removeModal()
+  })
+  
+  # Render advance runners field 
+  output$runner_field <- renderPlot({
+    p <- draw_baseball_field() +
+      xlim(40,250) +
+      ylim(40,250)
+    bases <- data.frame(
+      base = c("First", "Second", "Third"),
+      x = c(192, 192, 102),
+      y = c(102, 192, 192),
+      occupied = c(game_state$runners$first, game_state$runners$second, game_state$runners$third)
+    )
+    p <- p + 
+      geom_point(data = bases[bases$occupied, ], 
+                 aes(x = x, y = y), 
+                 color = "yellow", 
+                 size = 7, 
+                 shape = 15) # Yellow squares for occupied bases
+    
+    # Highlight selected base (if any)
+    if (!is.null(runner_selection$base)) {
+      selected_base <- bases[bases$base == runner_selection$base, ]
+      p <- p + geom_point(data = selected_base, 
+                          aes(x = x, y = y), 
+                          color = "red", 
+                          size = 8, 
+                          shape = 15)  # Red square for selected base
+    }
+    
+    p
+  }, height = 600, width = 600)
+  
+  # RenderUI runner options
+  output$runner_options <- renderUI({
+    if (is.null(runner_selection$base)) {
+      tags$p("Click a base to select a runner.")
+    } else {
+      fluidRow(
+        column(6, 
+               actionButton("runner_safe", "Safe", class = "wide-btn"),
+               conditionalPanel(
+                 condition = "input.runner_safe > 0",
+                 selectInput("advance_reason", "Reason", choices = advance_reasons),
+                 actionButton("confirm_advance", "Confirm Advance", class = "wide-btn")
+               )),
+        column(6, 
+               actionButton("runner_out", "Out", class = "wide-btn"),
+               conditionalPanel(
+                 condition = "input.runner_out > 0",
+                 actionButton("confirm_out", "Confirm Out", class = "wide-btn")
+               ))
+      )
+    }
+  })
+  
+  # Render runner UI dynamically based on hit_outcome
+  output$runner_ui_output <- renderUI({
+    runners_on <- sum(game_state$runners$first, game_state$runners$second, game_state$runners$third)
+    if (!is.null(input$hit_outcome) && input$hit_outcome != "Homerun" && runners_on > 0) {
+      tagList(
+        if (game_state$runners$first) {
+          selectInput("first_advance", "First Base Runner Advances To:",
+                      choices = c("Stay on First", "Second", "Third", "Home"))
+        },
+        if (game_state$runners$second) {
+          selectInput("second_advance", "Second Base Runner Advances To:",
+                      choices = c("Stay on Second", "Third", "Home"))
+        },
+        if (game_state$runners$third) {
+          selectInput("third_advance", "Third Base Runner Advances To:",
+                      choices = c("Stay on Third", "Home"))
+        }
+      )
+    } else {
+      NULL  # No runner UI for Homerun or no runners
+    }
+  })
+  
+  ########## Score Board Functioning ##########
+  # Inning number
+  output$inning_number <- renderText({
+    as.character(game_state$inning)
+  })  
+  
+  # Inning arrow (up for top, down for bottom)
+  output$inning_arrow <- renderUI({
+    if (game_state$half == "top") {
+      HTML("&#9650;")  # Unicode for upward triangle (▲)
+    } else {
+      HTML("&#9660;")  # Unicode for downward triangle (▼)
+    }
+  })  
+  
+  # Reactive for selected runner  
+  runner_selection <- reactiveValues(base = NULL)  
+  
+  # Render Game Score
+  output$away_score <- renderText({
+    as.character(game_state$away_score)
+  })
+  
+  output$home_score <- renderText({
+    as.character(game_state$home_score)
+  })
+  
+  # Render scoreboard bases 
+  output$bases_graphic <- renderPlot({
+    # Define base positions even closer together
+    bases <- data.frame(
+      base = c("First", "Second", "Third"),
+      x = c(0.15, 0, -0.15),  
+      y = c(0, 0.15, 0),    
+      occupied = c(game_state$runners$first, game_state$runners$second, game_state$runners$third)
+    )
+    
+    ggplot(bases, aes(x = x, y = y)) +
+      # Squares with black outline, filled based on occupancy
+      geom_point(aes(fill = occupied), size = 8, shape = 22, color = "black") +
+      scale_fill_manual(values = c("FALSE" = "white", "TRUE" = "black")) +
+      coord_fixed() +
+      theme_void() +
+      theme(legend.position = "none", 
+            plot.margin = margin(0, 0, 0, 0),
+            plot.background = element_rect(fill = "transparent", color = NA)) +
+      xlim(-0.4, 0.4) + ylim(-0.2, 0.4)  # Even tighter boundaries
+  }, height = 80, bg = "transparent")
+  
+  # Render strikes/balls graphic
+  output$count_and_outs <- renderUI({
+    print(paste("Rendering count_and_outs - Balls:", game_state$balls, "Strikes:", game_state$strikes, "Outs:", game_state$outs))
+    balls_circles <- paste(rep("<div class='circle ball-circle'></div>", game_state$balls), collapse = "")
+    strikes_circles <- paste(rep("<div class='circle strike-circle'></div>", game_state$strikes), collapse = "")
+    outs_circles <- paste(rep("<div class='circle out-circle'></div>", game_state$outs), collapse = "")
+    HTML(paste(
+      "<div>Balls: ", balls_circles, "</div>",
+      "<div>Strikes: ", strikes_circles, "</div>",
+      "<div>Outs: ", outs_circles, "</div>"
+    ))
+  })
+  
+  ########## Strike Zone Functioning ##########
+  
+  # For the clickable pitch location
+  pitches <- reactiveValues(
+    location = data.frame(
+      xlocation = numeric(), 
+      ylocation = numeric()
+    )
+  )
+  
+  # Reactive value for ball-in-play hit location
+  hit_location <- reactiveValues(
+    coords = data.frame(x = numeric(), y = numeric())
+  )
+  
+  # Update pitch location when the plot is clicked (only one pitch at a time)
+  observeEvent(input$plot_click, {
+    new_pitch <- data.frame(
+      xlocation = input$plot_click$x, 
+      ylocation = input$plot_click$y
+    )
+    pitches$location <- new_pitch
+  })
+  
+  # Render Strike Zone Plot
+  output$strike_zone <- renderPlot({
+    ggplot() +
+      # Strike zone rectangle (approximate)
+      geom_rect(aes(xmin = -0.85, xmax = 0.85, ymin = 1.5, ymax = 3.5),
+                fill = "transparent", color = "black", linewidth = 1) +
+      # Plot the recorded pitch location (if any)
+      geom_point(data = pitches$location, aes(x = xlocation, y = ylocation),
+                 color = "red", size = 7) +
+      coord_fixed() +
+      xlim(-1.5, 1.5) +
+      ylim(0, 5) +
+      theme_minimal()
+  })
+  ########## Heat Map functioning ##########
+  # Filter pitches 
+  generate_strikezone_heatmap <- function(player_id) {
+    print(paste("Generating heatmap for PlayerID:", player_id))
+    
+    req(player_id)
+    
+    # Filter and prepare pitch data
+    batter_pitches <- pitch_data$pitches %>%
+      filter(HitterID == player_id, 
+             PitchOutcome %in% c("Ball In Play", "Swinging Strike")) %>%
+      select(PitchLocationx, PitchLocationy, PitchOutcome, ContactType) %>%
+      mutate(
+        Score = case_when(
+          PitchOutcome == "Ball In Play" & ContactType == "Hard" ~ 3,
+          PitchOutcome == "Ball In Play" & ContactType == "Average" ~ 2,
+          PitchOutcome == "Ball In Play" & ContactType == "Weak" ~ 1,
+          PitchOutcome == "Swinging Strike" ~ 1,
+          TRUE ~ 0
+        )
+      ) %>%
+      filter(!is.na(PitchLocationx), !is.na(PitchLocationy))
+    
+    print(paste("Number of pitches found:", nrow(batter_pitches)))
+    if (nrow(batter_pitches) > 0) {
+      print(head(batter_pitches))
+    }
+    
+    if (nrow(batter_pitches) == 0) {
+      ggplot() +
+        geom_rect(aes(xmin = -0.85, xmax = 0.85, ymin = 1.5, ymax = 3.5),
+                  fill = "transparent", color = "black", linewidth = 1) +
+        coord_fixed() +
+        xlim(-1.5, 1.5) +
+        ylim(0, 5) +
+        theme_minimal() +
+        labs(title = "Strike Zone Heat Map (No Data)", x = NULL, y = NULL) +  # Remove axis titles
+        theme(axis.text = element_blank(),  # Remove axis labels
+              legend.position = "none")     # Remove legend
+    } else {
+      ggplot(batter_pitches, aes(x = PitchLocationx, y = PitchLocationy)) +
+        geom_rect(aes(xmin = -0.85, xmax = 0.85, ymin = 1.5, ymax = 3.5),
+                  fill = "transparent", color = "black", linewidth = 1) +
+        stat_density_2d(aes(fill = ..density.., weight = Score), geom = "raster", contour = FALSE) +
+        scale_fill_gradient2(low = "green", mid = "yellow", high = "red", midpoint = 0.5) +  # No legend name needed
+        coord_fixed() +
+        xlim(-1.5, 1.5) +
+        ylim(0, 5) +
+        theme_minimal() +
+        labs(title = "Strike Zone Heat Map", x = NULL, y = NULL) + 
+        theme(axis.text = element_blank(),  
+              legend.position = "none")     
+    }
+  }
+  
+  
+  output$player_heatmap <- renderPlot({
+    req(selected_player$player_id)
+    print("Rendering player_heatmap")
+    tryCatch({
+      generate_strikezone_heatmap(selected_player$player_id)
+    }, error = function(e) {
+      print(paste("Error in heatmap generation:", e$message))
+      ggplot() +
+        geom_text(aes(x = 0, y = 2.5, label = "Heatmap Error"), size = 6) +
+        coord_fixed() +
+        xlim(-1.5, 1.5) +
+        ylim(0, 5) +
+        theme_minimal()
+    })
+  })
+  
+  ########## Spray Chart Functioning ##########
+  
+  # Spray chart plotting function
+  generate_spray_chart <- function(player_id, role = "hitter", context = "gameplay") {
+    # Filter data based on player_id and role
+    if (role == "hitter") {
+      spray_data <- pitch_data$pitches %>%
+        filter(HitterID == player_id)
+    } else {
+      spray_data <- pitch_data$pitches %>%
+        filter(PitcherID == player_id)
+    }
+    
+    # Process data for spray chart
+    spray_data <- spray_data %>%
+      filter(!is.na(SprayChartx), !is.na(SprayCharty)) %>%
+      select(SprayChartx, SprayCharty, ContactType) %>%
+      mutate(
+        ContactQuality = case_when(
+          ContactType == "Weak" ~ "Weak",
+          ContactType == "Poor" ~ "Average",
+          ContactType == "Solid" ~ "Hard",
+          TRUE ~ "Average"  # Default to "Average" for unknown types
+        ),
+        ContactColor = case_when(
+          ContactQuality == "Hard" ~ "red",
+          ContactQuality == "Average" ~ "yellow",
+          ContactQuality == "Weak" ~ "green"
+        )
+      )
+    
+    # Base plot with field (always included)
+    p <- draw_baseball_field()
+    
+    # Add points if data exists, otherwise add "No Data" message
+    if (nrow(spray_data) > 0) {
+      # Scale coordinates to match draw_baseball_field's 40-500 range
+      spray_data <- spray_data %>%
+        mutate(
+          SprayChartx = ifelse(is.na(SprayChartx), 40, 
+                               (SprayChartx - min(SprayChartx, na.rm = TRUE)) / (max(SprayChartx, na.rm = TRUE) - min(SprayChartx, na.rm = TRUE)) * 460 + 40),
+          SprayCharty = ifelse(is.na(SprayCharty), 40, 
+                               (SprayCharty - min(SprayCharty, na.rm = TRUE)) / (max(SprayCharty, na.rm = TRUE) - min(SprayCharty, na.rm = TRUE)) * 460 + 40)
+        )
+      
+      p <- p +
+        geom_point(
+          data = spray_data,
+          aes(x = SprayChartx, y = SprayCharty, color = ContactQuality),
+          size = 3,
+          alpha = 0.7,
+          shape = 16  # Use circles only
+        ) +
+        scale_color_manual(values = c("Hard" = "red", "Average" = "yellow", "Weak" = "green"))
+    } 
+    p <- p +
+      theme(legend.position = ifelse(context == "pdf", "none", "bottom"))
+    
+    return(p)
+  }
+  
+  # Hitter spray chart
+  output$hitter_spray_chart <- renderPlot({
+    req(selected_player$player_id)
+    print("Rendering hitter_spray_chart")
+    tryCatch({
+      generate_spray_chart(selected_player$player_id, role = "hitter")
+    }, error = function(e) {
+      print(paste("Error in hitter spray chart:", e$message))
+      draw_baseball_field() +
+        geom_text(aes(x = 250, y = 250, label = "Spray Chart Error"), size = 6) +
+        theme_minimal()
+    })
+  })
+  
+  # Pitcher spray chart
+  output$pitcher_spray_chart <- renderPlot({
+    req(selected_player$player_id)
+    print("Rendering pitcher_spray_chart")
+    tryCatch({
+      generate_spray_chart(selected_player$player_id, role = "pitcher")
+    }, error = function(e) {
+      print(paste("Error in pitcher spray chart:", e$message))
+      draw_baseball_field() +
+        geom_text(aes(x = 250, y = 250, label = "Spray Chart Error"), size = 6) +
+        theme_minimal()
+    })
+  })
+  ########## End of Game and Summary Functioning ##########
+  
+  # End of game observe
+  observeEvent(input$end_game_confirm, {
+    app_state$page <- "game summary"
+  })
+  
+  # Game Summary Outputs
+  output$summary_away_score <- renderText({
+    as.character(game_state$away_score)
+  })
+  
+  output$summary_home_score <- renderText({
+    as.character(game_state$home_score)
+  })
+  
+  # Home button navigation
+  observeEvent(input$go_home_from_summary, {
+    app_state$page <- "start"
+  })
+  
+  ########## Adding Players Both Individually & Bulk with Excel ##########
+  ## Individually Adding PLayers on the Input Page, this is the Confirm Button
+  observeEvent(input$confirm_player, {
+    #Require Inputs
+    req(input$team_selection != "Choose Team")
+    req(input$first_name)
+    req(input$last_name)
+    req(input$jersey_number)
+    req(input$player_type)
+    req(input$grad_year)
+    if (input$player_type == "Hitter") {
+      req(input$batter_handedness)
+    }
+    if (input$player_type == "Pitcher") {
+      req(input$throwing_handedness)
+    }
+    if (input$player_type == "Two-Way") {
+      req(input$batter_handedness)
+      req(input$throwing_handedness)
+    }
+    
+    # Ensure Unique Player
+    existing_player <- stored_players %>%
+      filter(LastName == input$last_name, 
+             TeamID == (division3teams %>% filter(CollegeName == input$team_selection) %>% pull(TeamID)),
+             JerseyNumber == input$jersey_number)
+    
+    if (nrow(existing_player) > 0) {
+      showNotification("Player already exists!", type = "error")
+      return()  # Stop execution if player exists
+    }
+    
+    # Generating Unique 6-Digit Player_ID
+    repeat {
+      new_player_id <- sample(100000:999999, 1)
+      if (!new_player_id %in% stored_players$PlayerID) break
+    }
+    
+    #Create Short Tern Data Frame
+    new_player <- data.frame(
+      PlayerID = as.numeric(new_player_id),
+      TeamID = as.numeric(division3teams %>% filter(CollegeName == input$team_selection) %>% pull(TeamID)),
+      FirstName = as.character(input$first_name),
+      LastName = as.character(input$last_name),
+      FullName = paste(input$first_name, input$last_name),
+      JerseyNumber = as.numeric(input$jersey_number),
+      PlayerType = as.character(input$player_type),
+      GradYear = as.numeric(input$grad_year),
+      BatterHandedness = as.character(input$batter_handedness),
+      ThrowingHandedness = as.character(input$throwing_handedness),
+      Status = as.character(ifelse(input$grad_year < current_year, "Graduated", "Active")),
+      stringsAsFactors = FALSE
+    )
+    
+    # Bind the short term to the long term
+    stored_players <<- rbind(stored_players, new_player)
+    
+    # Show success message
+    showNotification("Player successfully added!", type = "message")
+    
+    #Reset the boxes for more players
+    updateSelectInput(session, "team_selection", selected = "Choose Team")
+    updateTextInput(session, "first_name", value = "")
+    updateTextInput(session, "last_name", value = "")
+    updateNumericInput(session, "jersey_number", value = NA)
+    updateSelectInput(session, "player_type", selected = "")
+    updateNumericInput(session, "grad_year", value = NA)
+    updateSelectInput(session, "batter_handedness", selected = "")
+    updateSelectInput(session, "throwing_handedness", selected = "")
+    
+  })
+  
+  # Bulk Import of Players Through Excel
+  observeEvent(input$import_players, {
+    req(input$excel_file)
+    
+    uploaded_data <- read_excel(input$excel_file$datapath)
+    
+    # Make sure necessary columns exist in excel file
+    required_columns <- c("CollegeName", "FirstName", "LastName", "JerseyNumber", "PlayerType", "GradYear", "BatterHandedness", "ThrowingHandedness")
+    
+    if (!all(required_columns %in% colnames(uploaded_data))) {
+      showNotification("Invalid file format! Please check column names.", type = "error")
+      return()
+    }
+    
+    # Join TeamID into uploaded data
+    uploaded_data <- uploaded_data %>%
+      left_join(division3teams, by = "CollegeName") %>%
+      select(-CollegeName, -CollegeAbreviation, -Conference, -Region)  # Remove extra columns
+    
+    # Check for unmatched TeamID values
+    if (any(is.na(uploaded_data$TeamID))) {
+      showNotification("Some college names do not match database!", type = "error")
+      return()
+    }
+    
+    # Change college to right variable type
+    uploaded_data <- uploaded_data %>%
+      mutate(
+        TeamID = as.numeric(TeamID),
+        FirstName = as.character(FirstName),
+        LastName = as.character(LastName),
+        FullName = as.character(paste(FirstName, LastName)),
+        JerseyNumber = as.numeric(JerseyNumber),
+        PlayerType = as.character(PlayerType),
+        GradYear = as.numeric(GradYear),
+        BatterHandedness = as.character(BatterHandedness),
+        ThrowingHandedness = as.character(ThrowingHandedness)
+      ) %>%
+      mutate(across(where(is.character), ~ ifelse(is.na(.), "", .)))
+    
+    # Data table for existing players, then check to see if were uploading any existing players
+    existing_players <- stored_players %>%
+      select(TeamID, FirstName, LastName, FullName, JerseyNumber, PlayerType, GradYear, BatterHandedness, ThrowingHandedness)
+    
+    new_players <- uploaded_data %>%
+      anti_join(existing_players, by = c("FullName", "BatterHandedness", "ThrowingHandedness"))
+    
+    if (nrow(new_players) == 0) {
+      showNotification("No new players to import. All already exist!", type = "warning")
+      return()
+    }
+    
+    # Assign 6-digit Player_IDs
+    existing_ids <- stored_players$PlayerID
+    all_possible_ids <- 100000:999999
+    available_ids <- setdiff(all_possible_ids, existing_ids)
+    
+    new_players$PlayerID <- sample(available_ids, nrow(new_players))
+    
+    # Set player status based on GradYear
+    new_players <- new_players %>%
+      mutate(Status = ifelse(GradYear < current_year, "Graduated", "Active"))
+    
+    # Add new players to database
+    stored_players <<- bind_rows(stored_players, new_players)
+    
+    showNotification("Players imported successfully!", type = "message")
+    
+  })
+  
+  ########## Updating Players ##########
+  # Selecting Names
+  observe({
+    updateSelectInput(session, "edit_player_name", choices = stored_players$FullName)
+  })
+  
+  observe({
+    updateSelectInput(session, "delete_player_id", choices = stored_players$FullName)
+  })
+  
+  # Display player details when selected for editing
+  observeEvent(input$edit_player_name, {
+    req(input$edit_player_name)
+    
+    player_idx_edit <- which(stored_players$FullName == input$edit_player_name)
+    if (length(player_idx_edit) == 0) {
+      output$player_info_display_edit <- renderText("Player not found!")
+      return()
+    }
+    
+    selected_player_edit <- stored_players[player_idx_edit, ]
+    
+    output$player_info_display_edit <- renderText({
+      paste0("Name: ", selected_player_edit$FullName, "\n",
+             "Jersey #: ", selected_player_edit$JerseyNumber, "\n",
+             "Type: ", selected_player_edit$PlayerType, "\n",
+             "Graduation Year: ", selected_player_edit$GradYear, "\n",
+             "Batting Hand: ", selected_player_edit$BatterHandedness, "\n",
+             "Throwing Hand: ", selected_player_edit$ThrowingHandedness, "\n",
+             "Status: ", selected_player_edit$Status)
+    })
+    
+    
+    # Prefill form with current player values
+    updateTextInput(session, "edit_first_name", value = selected_player_edit$FirstName)
+    updateTextInput(session, "edit_last_name", value = selected_player_edit$LastName)
+    updateNumericInput(session, "edit_jersey_number", value = selected_player_edit$JerseyNumber)
+    updateSelectInput(session, "edit_player_type", selected = selected_player_edit$PlayerType)
+    updateNumericInput(session, "edit_grad_year", value = selected_player_edit$GradYear)
+    updateSelectInput(session, "edit_batter_handedness", selected = selected_player_edit$BatterHandedness)
+    updateSelectInput(session, "edit_throwing_handedness", selected = selected_player_edit$ThrowingHandedness)
+    updateSelectInput(session, "edit_status", selected = selected_player_edit$Status)
+  })
+  
+  # Display player details when selected for deleting
+  observeEvent(input$delete_player_id, {
+    req(input$delete_player_id)
+    
+    player_idx_delete <- which(stored_players$FullName == input$delete_player_id)
+    if (length(player_idx_delete) == 0) {
+      output$player_info_display_delete <- renderText("Player not found!")
+      return()
+    }
+    
+    selected_player_delete <- stored_players[player_idx_delete, ]
+    
+    output$player_info_display_delete <- renderText({
+      paste0("Name: ", selected_player_delete$FullName, "\n",
+             "Jersey #: ", selected_player_delete$JerseyNumber, "\n",
+             "Type: ", selected_player_delete$PlayerType, "\n",
+             "Graduation Year: ", selected_player_delete$GradYear, "\n",
+             "Batting Hand: ", selected_player_delete$BatterHandedness, "\n",
+             "Throwing Hand: ", selected_player_delete$ThrowingHandedness, "\n",
+             "Status: ", selected_player_delete$Status)
+    })
+  })
+  
+  # Update player info
+  observeEvent(input$update_player, {
+    req(input$edit_player_name)
+    
+    player_idx_update <- which(stored_players$FullName == input$edit_player_name)
+    if (length(player_idx_update) == 0) {
+      showNotification("Player not found!", type = "error")
+      return()
+    }
+    
+    stored_players$FirstName[player_idx_update] <<- input$edit_first_name
+    stored_players$LastName[player_idx_update] <<- input$edit_last_name
+    stored_players$FullName[player_idx_update] <<- paste(input$edit_first_name, input$edit_last_name)
+    stored_players$JerseyNumber[player_idx_update] <<- input$edit_jersey_number
+    stored_players$PlayerType[player_idx_update] <<- input$edit_player_type
+    stored_players$GradYear[player_idx_update] <<- input$edit_grad_year
+    stored_players$BatterHandedness[player_idx_update] <<- input$edit_batter_handedness
+    stored_players$ThrowingHandedness[player_idx_update] <<- input$edit_throwing_handedness
+    stored_players$Status[player_idx_update] <<- input$edit_status
+    
+    showNotification("Player updated!", type = "message")
+  })
+  
+  # Delete Player Pop up
+  observeEvent(input$remove_player, {
+    req(input$delete_player_id)
+    player_idx_gone <- which(stored_players$FullName == input$delete_player_id)
+    if (length(player_idx_gone) == 0) {
+      showNotification("Player ID not found!", type = "error")
+      return()
+    }
+    
+    # Show the confirmation modal
+    showModal(modalDialog(
+      title = "Confirm Deletion",
+      paste("Are you sure you want to delete", input$delete_player_id, "?"),
+      easyClose = FALSE, # Prevent accidental closing
+      footer = tagList(
+        modalButton("Cancel"),  # Closes modal
+        actionButton("confirm_remove_player", "Confirm", class = "btn-danger") # Triggers deletion
+      )
+    ))
+  })
+  
+  # Confirm Delete Player
+  observeEvent(input$confirm_remove_player, {
+    player_idx_gone <- which(stored_players$FullName == input$delete_player_id)
+    stored_players <<- stored_players[-player_idx_gone, ]
+    showNotification("Player deleted!", type = "message")
+    removeModal()
+    updateNumericInput(session, "delete_player_id", value = NULL)
+  })
+  
+  # Merge Players
+  
+  ########## All Players Page Functioning ##########  
+  
+  # All Player List Output
+  output$player_list <- renderDT({
+    datatable(stored_players)
+  })
+  
+  observeEvent(input$add_player, { app_state$page <- "input" })
+  observeEvent(input$import_excel_page, { app_state$page <- "import_page" })
+  observeEvent(input$player_info, {app_state$page <- "update_player"})
+  
+  
+  ########## Render UI Dynamically - Allows switching pages ##########
+  output$dynamicUI <- renderUI({
+    switch(app_state$page,
+           "start" = startPage(),
+           "input" = inputPage(current_year),
+           "update_player" = updatePlayerPage(),
+           "list" = listPage(),
+           "stat" = statPage(),
+           "import_page" = importPage(),
+           "new_event" = newEventPage(),
+           "practice_event" = practicePage(),
+           "lineup" = lineupPage(),
+           "game_event" = gamePage(),
+           "game_summary" = gameSummaryPage(),
+           "team_stats" = teamStatsPage(),
+           "see_pitches" = pitchesPage()
+    )
+  })
+  
+  ########## Extra Buttons that only switch pages ##########
+  # Generalized Navigation Handler - These are basically all the buttons
+  observeEvent(input$go_home, { app_state$page <- "start" })
+  observeEvent(input$go_back, { app_state$page <- "start" })
+  
+  
+}
+
+shinyApp(ui, server)
